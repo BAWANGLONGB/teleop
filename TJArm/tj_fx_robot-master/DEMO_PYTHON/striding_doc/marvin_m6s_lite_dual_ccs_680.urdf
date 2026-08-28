@@ -1,0 +1,776 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="marvin_m6s_lite_dual_ccs_680">
+  <link name="dual_origin" />
+  <link name="support_column">
+    <visual>
+      <geometry>
+        <box size="0.12 0.12 1.2" />
+      </geometry>
+      <material name="support_column_material">
+        <color rgba="0.28 0.31 0.35 1" />
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.12 0.12 1.2" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="dual_to_support_column" type="fixed">
+    <origin xyz="0 0 -0.6" rpy="0 0 0" />
+    <parent link="dual_origin" />
+    <child link="support_column" />
+  </joint>
+  <link name="base_plate">
+    <visual>
+      <geometry>
+        <box size="0.6 0.6 0.02" />
+      </geometry>
+      <material name="base_plate_material">
+        <color rgba="0.18 0.20 0.23 1" />
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.6 0.6 0.02" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="dual_to_base_plate" type="fixed">
+    <origin xyz="0 0 -1.21" rpy="0 0 0" />
+    <parent link="dual_origin" />
+    <child link="base_plate" />
+  </joint>
+  <link name="Base_L">
+    <inertial>
+      <origin xyz="1.1648e-04 -9.321e-05 3.390668e-02" rpy="0 0 0" />
+      <mass value="0.8553322" />
+      <inertia ixx="6.5490e-04" ixy="-1.5e-07" ixz="7.70e-06" iyy="6.6931e-04" iyz="2.01e-06" izz="8.0985e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Base_L.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Base_L.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Link1_L">
+    <inertial>
+      <origin xyz="-3.3175e-04 -4.26687e-03 -3.522466e-02" rpy="0 0 0" />
+      <mass value="1.537551" />
+      <inertia ixx="3.66914e-03" ixy="1.77e-06" ixz="1.342e-05" iyy="3.94529e-03" iyz="-2.3437e-04" izz="1.31774e-03" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link1_L.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link1_L.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint1_L" type="revolute">
+    <origin xyz="0 0 0.1586" rpy="0 0 0" />
+    <parent link="Base_L" />
+    <child link="Link1_L" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.0194" upper="3.0194" effort="35" velocity="3.1416" />
+  </joint>
+  <link name="Link2_L">
+    <inertial>
+      <origin xyz="2.044e-05 0.0535881 -0.00881535" rpy="0 0 0" />
+      <mass value="1.58697" />
+      <inertia ixx="0.00651482" ixy="8.49e-06" ixz="1.19e-06" iyy="0.0018653" iyz="0.00075929" izz="0.00613149" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link2_L.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 0 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link2_L.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint2_L" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5708 0 0" />
+    <parent link="Link1_L" />
+    <child link="Link2_L" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.0595" upper="2.0595" effort="35" velocity="3.1416" />
+  </joint>
+  <link name="Link3_L">
+    <inertial>
+      <origin xyz="0.00782627 -0.00511917 -0.07354675" rpy="0 0 0" />
+      <mass value="1.66375928" />
+      <inertia ixx="0.01097251" ixy="-0.00007013" ixz="0.00099536" iyy="0.01136075" iyz="-0.00049180" izz="0.00157281" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link3_L.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link3_L.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint3_L" type="revolute">
+    <origin xyz="0 0.329 0" rpy="-1.5708 0 0" />
+    <parent link="Link2_L" />
+    <child link="Link3_L" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.0194" upper="3.0194" effort="18" velocity="3.1416" />
+  </joint>
+  <link name="Link4_L">
+    <inertial>
+      <origin xyz="0.00840183 -0.038565 -0.0073627" rpy="0 0 0" />
+      <mass value="1.03775" />
+      <inertia ixx="0.00308966" ixy="-0.00038612" ixz="7.072e-05" iyy="0.00119659" iyz="-0.00032564" izz="0.0029308" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link4_L.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link4_L.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint4_L" type="revolute">
+    <origin xyz="0.018 0 0" rpy="-1.5708 0 3.1416" />
+    <parent link="Link3_L" />
+    <child link="Link4_L" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.5307" upper="0.7854" effort="18" velocity="3.1416" />
+  </joint>
+  <link name="Link5_L">
+    <inertial>
+      <origin xyz="-5.008e-04 2.23923e-03 -9.253416e-02" rpy="0 0 0" />
+      <mass value="1.000479" />
+      <inertia ixx="2.17057e-03" ixy="-1.142e-05" ixz="-6.68e-06" iyy="1.95131e-03" iyz="3.059e-05" izz="8.4222e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link5_L.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 0 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link5_L.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint5_L" type="revolute">
+    <origin xyz="0.018 -0.264 0" rpy="-1.5708 0 3.1416" />
+    <parent link="Link4_L" />
+    <child link="Link5_L" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.0194" upper="3.0194" effort="5.5" velocity="3.1416" />
+  </joint>
+  <link name="Link6_L">
+    <inertial>
+      <origin xyz="1.8634e-04 2.3824e-04 -5.829e-04" rpy="0 0 0" />
+      <mass value="0.3906229" />
+      <inertia ixx="1.9943e-04" ixy="1.1800e-06" ixz="-3.0000e-07" iyy="1.7163e-04" iyz="-3.5300e-06" izz="1.8567e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link6_L.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link6_L.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint6_L" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5708 -1.5708 0" />
+    <parent link="Link5_L" />
+    <child link="Link6_L" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.0472" upper="1.0472" effort="5.5" velocity="3.1416" />
+  </joint>
+  <link name="Link7_L">
+    <inertial>
+      <origin xyz="-5.2431e-04 -3.976234e-02 7.27342e-03" rpy="0 0 0" />
+      <mass value="0.37939" />
+      <inertia ixx="7.0308e-04" ixy="5.97e-06" ixz="7.30e-07" iyy="3.0365e-04" iyz="1.2769e-04" izz="5.8833e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link7_L.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/Link7_L.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint7_L" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5708 -1.5708 0" />
+    <parent link="Link6_L" />
+    <child link="Link7_L" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.5708" upper="1.5708" effort="5.5" velocity="3.1416" />
+  </joint>
+  <link name="TCP_Link_L">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0" />
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-L-CCS-680-V1.0 urdf/meshes/TCP_Link_L.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+  </link>
+  <joint name="JointTCP_L" type="fixed">
+    <origin xyz="0 -0.087 0" rpy="1.5708 -1.5708 0" />
+    <parent link="Link7_L" />
+    <child link="TCP_Link_L" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <link name="Base_R">
+    <inertial>
+      <origin xyz="1.1648e-04 -9.321e-05 3.390668e-02" rpy="0 0 0" />
+      <mass value="0.8553322" />
+      <inertia ixx="6.5490e-04" ixy="-1.5e-07" ixz="7.70e-06" iyy="6.6931e-04" iyz="2.01e-06" izz="8.0985e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Base_R.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Base_R.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Link1_R">
+    <inertial>
+      <origin xyz="-3.3175e-04 -4.26687e-03 -3.522466e-02" rpy="0 0 0" />
+      <mass value="1.537551" />
+      <inertia ixx="3.66914e-03" ixy="1.77e-06" ixz="1.342e-05" iyy="3.94529e-03" iyz="-2.3437e-04" izz="1.31774e-03" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link1_R.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link1_R.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint1_R" type="revolute">
+    <origin xyz="0 0 0.1586" rpy="0 0 0" />
+    <parent link="Base_R" />
+    <child link="Link1_R" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.0194" upper="3.0194" effort="35" velocity="3.1416" />
+  </joint>
+  <link name="Link2_R">
+    <inertial>
+      <origin xyz="2.044e-05 0.0535881 -0.00881535" rpy="0 0 0" />
+      <mass value="1.58697" />
+      <inertia ixx="0.00651482" ixy="8.49e-06" ixz="1.19e-06" iyy="0.0018653" iyz="0.00075929" izz="0.00613149" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link2_R.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 0 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link2_R.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint2_R" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5708 0 0" />
+    <parent link="Link1_R" />
+    <child link="Link2_R" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.0595" upper="2.0595" effort="35" velocity="3.1416" />
+  </joint>
+  <link name="Link3_R">
+    <inertial>
+      <origin xyz="0.00782627 -0.00511917 -0.07354675" rpy="0 0 0" />
+      <mass value="1.66375928" />
+      <inertia ixx="0.01097251" ixy="-0.00007013" ixz="0.00099536" iyy="0.01136075" iyz="-0.00049180" izz="0.00157281" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link3_R.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link3_R.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint3_R" type="revolute">
+    <origin xyz="0 0.329 0" rpy="-1.5708 0 0" />
+    <parent link="Link2_R" />
+    <child link="Link3_R" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.0194" upper="3.0194" effort="18" velocity="3.1416" />
+  </joint>
+  <link name="Link4_R">
+    <inertial>
+      <origin xyz="0.00840183 -0.038565 -0.0073627" rpy="0 0 0" />
+      <mass value="1.03775" />
+      <inertia ixx="0.00308966" ixy="-0.00038612" ixz="7.072e-05" iyy="0.00119659" iyz="-0.00032564" izz="0.0029308" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link4_R.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link4_R.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint4_R" type="revolute">
+    <origin xyz="0.018 0 0" rpy="-1.5708 0 3.1416" />
+    <parent link="Link3_R" />
+    <child link="Link4_R" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.5307" upper="0.7854" effort="18" velocity="3.1416" />
+  </joint>
+  <link name="Link5_R">
+    <inertial>
+      <origin xyz="5.008e-04 -2.23923e-03 -9.253416e-02" rpy="0 0 0" />
+      <mass value="1.000479" />
+      <inertia ixx="2.17057e-03" ixy="-1.142e-05" ixz="6.68e-06" iyy="1.95131e-03" iyz="-3.059e-05" izz="8.4222e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link5_R.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 0 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link5_R.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint5_R" type="revolute">
+    <origin xyz="0.018 -0.264 0" rpy="-1.5708 0 3.1416" />
+    <parent link="Link4_R" />
+    <child link="Link5_R" />
+    <axis xyz="0 0 1" />
+    <limit lower="-3.0194" upper="3.0194" effort="5.5" velocity="3.1416" />
+  </joint>
+  <link name="Link6_R">
+    <inertial>
+      <origin xyz="-1.8634e-04 2.3824e-04 5.829e-04" rpy="0 0 0" />
+      <mass value="0.3906229" />
+      <inertia ixx="1.9943e-04" ixy="-1.1800e-06" ixz="-3.0000e-07" iyy="1.7163e-04" iyz="3.5300e-06" izz="1.8567e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link6_R.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link6_R.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint6_R" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5708 -1.5708 0" />
+    <parent link="Link5_R" />
+    <child link="Link6_R" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.0472" upper="1.0472" effort="5.5" velocity="3.1416" />
+  </joint>
+  <link name="Link7_R">
+    <inertial>
+      <origin xyz="-5.2431e-04 -3.976234e-02 7.27342e-03" rpy="0 0 0" />
+      <mass value="0.37939" />
+      <inertia ixx="7.0308e-04" ixy="5.97e-06" ixz="7.30e-07" iyy="3.0365e-04" iyz="1.2769e-04" izz="5.8833e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link7_R.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/Link7_R.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint7_R" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5708 -1.5708 0" />
+    <parent link="Link6_R" />
+    <child link="Link7_R" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.5708" upper="1.5708" effort="5.5" velocity="3.1416" />
+  </joint>
+  <link name="TCP_Link_R">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0" />
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="Marvin M6S-Lite-R-CCS-680-V1.0 urdf/meshes/TCP_Link_R.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+  </link>
+  <joint name="JointTCP_R" type="fixed">
+    <origin xyz="0 -0.087 0" rpy="1.5708 -1.5708 0" />
+    <parent link="Link7_R" />
+    <child link="TCP_Link_R" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <joint name="dual_to_Base_L" type="fixed">
+    <origin xyz="0 0.06 -0.1" rpy="-1.5707963267948966 0 0" />
+    <parent link="dual_origin" />
+    <child link="Base_L" />
+  </joint>
+  <joint name="dual_to_Base_R" type="fixed">
+    <origin xyz="0 -0.06 -0.1" rpy="1.5707963267948966 0 0" />
+    <parent link="dual_origin" />
+    <child link="Base_R" />
+  </joint>
+  <link name="L_base_link">
+    <inertial>
+      <origin xyz="-0.0120606102391873 -0.000276601526733394 -0.0229397958275224" rpy="0 0 0" />
+      <mass value="0.0281521266992722" />
+      <inertia ixx="1.97240821968807E-05" ixy="3.54338575893735E-08" ixz="-2.48061339279387E-06" iyy="2.01942094152822E-05" iyz="-4.65760515813562E-08" izz="2.99806075388787E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/base_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="L_fflan_Link">
+    <inertial>
+      <origin xyz="0.0448497180156061 0.0169763635740017 -9.64809781988651E-05" rpy="0 0 0" />
+      <mass value="0.0426998697718406" />
+      <inertia ixx="3.31865036266034E-05" ixy="-6.2111284759859E-06" ixz="1.36524444034588E-07" iyy="5.07298417778471E-05" iyz="2.29067495184683E-08" izz="4.01899412725534E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fflan_Link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fflan_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="L_fflan_to_base" type="fixed">
+    <origin xyz="0.0708615418463922 0.0812149317453119 -0.0000482480870888924" rpy="-1.5707963267948966 0 0" />
+    <parent link="L_fflan_Link" />
+    <child link="L_base_link" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <link name="L_fleft_Link">
+    <inertial>
+      <origin xyz="0.0373952910033347 -0.00562275899912165 -0.0395477842913183" rpy="0 0 0" />
+      <mass value="0.0222777566423965" />
+      <inertia ixx="8.24250591185251E-06" ixy="-1.03072009385765E-07" ixz="5.61603873020945E-06" iyy="1.27675976099468E-05" iyz="1.23926225058668E-07" izz="5.38218211885671E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fleft_Link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fleft_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="L_fleft" type="revolute">
+    <origin xyz="0.00793885671580377 0.0292902518998249 -0.0344178755407507" rpy="1.5707963267949 0 0" />
+    <parent link="L_base_link" />
+    <child link="L_fleft_Link" />
+    <axis xyz="0 -0.999999999999966 0" />
+    <limit lower="0" upper="1" effort="1" velocity="1" />
+  </joint>
+  <link name="L_fright_Link">
+    <inertial>
+      <origin xyz="0.0373982883203603 -0.00562117111513777 0.0395407722712265" rpy="0 0 0" />
+      <mass value="0.0222746413340079" />
+      <inertia ixx="8.23820786150306E-06" ixy="-1.03525248494791E-07" ixz="-5.61239069024735E-06" iyy="1.27602097325754E-05" iyz="-1.24189697094109E-07" izz="5.37894196104843E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fright_Link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fright_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="L_fright" type="revolute">
+    <origin xyz="0.00793885671580385 -0.0293867480983751 -0.0344178755407507" rpy="1.5707963267949 0 0" />
+    <parent link="L_base_link" />
+    <child link="L_fright_Link" />
+    <axis xyz="0 -1 0" />
+    <limit lower="-1" upper="0" effort="1" velocity="1" />
+    <mimic joint="L_fleft" multiplier="-1" offset="0" />
+  </joint>
+  <link name="R_base_link">
+    <inertial>
+      <origin xyz="-0.0120606102391873 -0.000276601526733394 -0.0229397958275224" rpy="0 0 0" />
+      <mass value="0.0281521266992722" />
+      <inertia ixx="1.97240821968807E-05" ixy="3.54338575893735E-08" ixz="-2.48061339279387E-06" iyy="2.01942094152822E-05" iyz="-4.65760515813562E-08" izz="2.99806075388787E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/base_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="R_fflan_Link">
+    <inertial>
+      <origin xyz="0.0448497180156061 0.0169763635740017 -9.64809781988651E-05" rpy="0 0 0" />
+      <mass value="0.0426998697718406" />
+      <inertia ixx="3.31865036266034E-05" ixy="-6.2111284759859E-06" ixz="1.36524444034588E-07" iyy="5.07298417778471E-05" iyz="2.29067495184683E-08" izz="4.01899412725534E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fflan_Link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fflan_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="R_fflan_to_base" type="fixed">
+    <origin xyz="0.0708615418463922 0.0812149317453119 -0.0000482480870888924" rpy="-1.5707963267948966 0 0" />
+    <parent link="R_fflan_Link" />
+    <child link="R_base_link" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <link name="R_fleft_Link">
+    <inertial>
+      <origin xyz="0.0373952910033347 -0.00562275899912165 -0.0395477842913183" rpy="0 0 0" />
+      <mass value="0.0222777566423965" />
+      <inertia ixx="8.24250591185251E-06" ixy="-1.03072009385765E-07" ixz="5.61603873020945E-06" iyy="1.27675976099468E-05" iyz="1.23926225058668E-07" izz="5.38218211885671E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fleft_Link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fleft_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="R_fleft" type="revolute">
+    <origin xyz="0.00793885671580377 0.0292902518998249 -0.0344178755407507" rpy="1.5707963267949 0 0" />
+    <parent link="R_base_link" />
+    <child link="R_fleft_Link" />
+    <axis xyz="0 -0.999999999999966 0" />
+    <limit lower="0" upper="1" effort="1" velocity="1" />
+  </joint>
+  <link name="R_fright_Link">
+    <inertial>
+      <origin xyz="0.0373982883203603 -0.00562117111513777 0.0395407722712265" rpy="0 0 0" />
+      <mass value="0.0222746413340079" />
+      <inertia ixx="8.23820786150306E-06" ixy="-1.03525248494791E-07" ixz="-5.61239069024735E-06" iyy="1.27602097325754E-05" iyz="-1.24189697094109E-07" izz="5.37894196104843E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fright_Link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="gripper/meshes/fright_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="R_fright" type="revolute">
+    <origin xyz="0.00793885671580385 -0.0293867480983751 -0.0344178755407507" rpy="1.5707963267949 0 0" />
+    <parent link="R_base_link" />
+    <child link="R_fright_Link" />
+    <axis xyz="0 -1 0" />
+    <limit lower="-1" upper="0" effort="1" velocity="1" />
+    <mimic joint="R_fleft" multiplier="-1" offset="0" />
+  </joint>
+  <joint name="TCP_L_to_gripper" type="fixed">
+    <origin xyz="0 0 0" rpy="3.141592653589793 -1.5707963267948966 0" />
+    <parent link="TCP_Link_L" />
+    <child link="L_fflan_Link" />
+  </joint>
+  <joint name="TCP_R_to_gripper" type="fixed">
+    <origin xyz="0 0 0" rpy="0 -1.5707963267948966 0" />
+    <parent link="TCP_Link_R" />
+    <child link="R_fflan_Link" />
+  </joint>
+</robot>

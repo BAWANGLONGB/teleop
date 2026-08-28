@@ -1,0 +1,57 @@
+# Local interpreters and package managers
+.miniconda-xr/
+.conda-envs/
+.conda-pkgs/
+.venv/
+.venv.*
+.mamba-root/
+.cache/
+.tools/
+
+# Git/Codex/editor metadata
+**/.git/
+.teleop-git/
+.agents/
+.codex/
+.codex_docx_review/
+.sync-backup-20260826/
+.pytest_cache/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.idea/
+.vscode/
+
+# Generated runtime data and build outputs
+**/logs/
+**/build/
+**/install/
+**/log/
+**/dependencies/
+**/dist/
+**/.pytest_cache/
+*.log
+*.jsonl
+*.csv
+*.npz
+*.npy
+
+# Vendor archives and CAD exports are kept outside the Git project.
+*.zip
+*.rar
+*.7z
+*.step
+*.STEP
+*.stp
+*.STP
+
+# Nested repositories are kept as local source snapshots, not Gitlinks.
+tianji/TJ_FX_ROBOT_CONTRL_SDK/
+tianji/roboavatar/
+
+# Native/binary SDK build artifacts
+*.so
+*.dll
+*.dylib
+TJArm/tj_fx_robot-master/MarvinPlatform_EN/MarvinPlatform_*
+TJArm/tj_fx_robot-master/SDK_PYTHON/libMarvinSDK.so

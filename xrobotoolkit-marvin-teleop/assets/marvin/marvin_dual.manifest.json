@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "robot": "marvin_dual_m6s_lite_ccs_680_v1",
+  "dof": 14,
+  "sources": {
+    "left": {
+      "path": "../../../simulation/models/left/Marvin M6S-Lite-L-CCS-680-V1.0 urdf/urdf/Marvin M6S-Lite-L-CCS-680-V1.0 urdf.urdf",
+      "sha256": "53832be9ecf3d04b0704ceeb5d533164105fb34c5e2c9186e7188ae3a81b7c2e"
+    },
+    "right": {
+      "path": "../../../simulation/models/right/Marvin M6S-Lite-R-CCS-680-V1.0 urdf/urdf/Marvin M6S-Lite-R-CCS-680-V1.0 urdf.urdf",
+      "sha256": "d686ef010dda10ea75c6b13e8f5bf7e1e3e7cfe99528ce95f05f00e454677fae"
+    },
+    "demo_model": {
+      "path": "../../../TJArm/tj_fx_robot-master/DEMO_PYTHON/striding_doc/marvin_m6s_lite_dual_ccs_680.xml",
+      "sha256": "84ab1b7274171b7b87b3a5b871d97180cef9cc2a322ed470f13ff359277febdb"
+    },
+    "demo_kinematics_config": {
+      "path": "../../../TJArm/tj_fx_robot-master/CommonConfig/config/ccs_680.MvKDCfg",
+      "sha256": "749289d55ba90d6d6e8c6106a9fc31721e7f720edfe67b5c1c81b60c2062f8df"
+    },
+    "demo_gripper_urdf": {
+      "path": "../../../TJArm/tj_fx_robot-master/DEMO_PYTHON/striding_doc/gripper/finger_controller_simplified.urdf",
+      "sha256": "800843d026db53c16a6d8ee1ee5a4e99259175162b1d56ea5b8feec5fe548631"
+    }
+  },
+  "output": {
+    "file": "marvin_dual.urdf",
+    "sha256": "553f4e9b687386c6b3ca5ec4eba8d08d4790eb4fdf3f73920ff7944d88a56cff",
+    "mujoco_file": "marvin_dual.mujoco.xml",
+    "mujoco_sha256": "24626c3bce196b6bc0ec76634eba2504729c7ded11cd0b09b65850789f5c736d"
+  },
+  "meshes": [
+    {
+      "file": "meshes/Base_L.STL",
+      "sha256": "268a09e335f69f1509be7cc47e2c039e00647f8fb49c7fafadcf53f164532baa"
+    },
+    {
+      "file": "meshes/Base_R.STL",
+      "sha256": "268a09e335f69f1509be7cc47e2c039e00647f8fb49c7fafadcf53f164532baa"
+    },
+    {
+      "file": "meshes/Link1_L.STL",
+      "sha256": "d34b22db1280e233435425c8ecc94f4323652458dbae6a767cd04ed18c9b1f81"
+    },
+    {
+      "file": "meshes/Link1_R.STL",
+      "sha256": "3e64da8f8dfbd1d1ed4ff9deb41d5ba6a48f28f2fdb7c31cdf68e1ddec191a76"
+    },
+    {
+      "file": "meshes/Link2_L.STL",
+      "sha256": "75e99bb1a7d2ef0d5c4e5bfc30afc5e396acfa6b5cfd3ad9973b01d551550ed0"
+    },
+    {
+      "file": "meshes/Link2_R.STL",
+      "sha256": "75e99bb1a7d2ef0d5c4e5bfc30afc5e396acfa6b5cfd3ad9973b01d551550ed0"
+    },
+    {
+      "file": "meshes/Link3_L.STL",
+      "sha256": "9c17cdd2c293f8d0ef9535c892edf09dae65a209b7a740504abfb34fffa13cf7"
+    },
+    {
+      "file": "meshes/Link3_R.STL",
+      "sha256": "9c17cdd2c293f8d0ef9535c892edf09dae65a209b7a740504abfb34fffa13cf7"
+    },
+    {
+      "file": "meshes/Link4_L.STL",
+      "sha256": "aafd2b1869e350979c38f540e4f8c38a948dd3abb043cd66034d87066737ea54"
+    },
+    {
+      "file": "meshes/Link4_R.STL",
+      "sha256": "aafd2b1869e350979c38f540e4f8c38a948dd3abb043cd66034d87066737ea54"
+    },
+    {
+      "file": "meshes/Link5_L.STL",
+      "sha256": "f69eaea9cfe6ff92ef49cd7b77ac576a3a1d67aa1e80c8b6ba42dc92833b3884"
+    },
+    {
+      "file": "meshes/Link5_R.STL",
+      "sha256": "5c2b41a04aa6116813990720d07ac9c73b54da427c7bfd004fd6c1441f60a17b"
+    },
+    {
+      "file": "meshes/Link6_L.STL",
+      "sha256": "370d1ca5e176d3661d72acb06805b9e7066380358995ff44612b0f114127820d"
+    },
+    {
+      "file": "meshes/Link6_R.STL",
+      "sha256": "b358d960a7b48bc01a91ba8595601ba8636eaef6374c440ee47b59d3d94d96c3"
+    },
+    {
+      "file": "meshes/Link7_L.STL",
+      "sha256": "9a304a3eddd05288f92318b3bdab57fe43e6ced8b45ab5c6fe9ed682e85e68e6"
+    },
+    {
+      "file": "meshes/Link7_R.STL",
+      "sha256": "b5800d74d62b8749c6449d8cef9a4ab9e6a78fe32bf2277ee29ca27d4e55a0ff"
+    },
+    {
+      "file": "meshes/gripper_base_link.STL",
+      "sha256": "42ef1aee5ffd1eef1e838dc7973f8de582ace3cf4ea6ef9f4bf1b7112c7699f7"
+    },
+    {
+      "file": "meshes/gripper_fflan_Link.STL",
+      "sha256": "8fe6f68a9dfdedb6e2a6ab444f4c539745d4ba4b88a98807d34116d040edfc7c"
+    },
+    {
+      "file": "meshes/gripper_fleft_Link.STL",
+      "sha256": "9908703b50d60dfdb410202ed68e0dc87c1e9997b6d116e7b96ea0f46f3e9538"
+    },
+    {
+      "file": "meshes/gripper_fright_Link.STL",
+      "sha256": "b1936675cf49188542cfd5a1dd1d83c903ce490205420cc2691d5f2164347398"
+    }
+  ],
+  "joint_order": {
+    "left": [
+      "Joint1_L",
+      "Joint2_L",
+      "Joint3_L",
+      "Joint4_L",
+      "Joint5_L",
+      "Joint6_L",
+      "Joint7_L"
+    ],
+    "right": [
+      "Joint1_R",
+      "Joint2_R",
+      "Joint3_R",
+      "Joint4_R",
+      "Joint5_R",
+      "Joint6_R",
+      "Joint7_R"
+    ]
+  },
+  "frames": {
+    "left_tcp": "left_tcp",
+    "right_tcp": "right_tcp"
+  },
+  "world_alignment": {
+    "rpy_rad": "0 0 3.141592653589793",
+    "purpose": "operator_facing"
+  },
+  "arm_mounts": {
+    "left": {
+      "parent": "base_link",
+      "child": "Base_L",
+      "xyz": "0 0.06 -0.1",
+      "rpy": "-1.5707963267948966 0 0"
+    },
+    "right": {
+      "parent": "base_link",
+      "child": "Base_R",
+      "xyz": "0 -0.06 -0.1",
+      "rpy": "1.5707963267948966 0 0"
+    }
+  }
+}
