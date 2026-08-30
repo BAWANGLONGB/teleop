@@ -1,46 +1,72 @@
-# TeleOp 工作区
+# PICO → Marvin 最小遥操闭环
 
-本仓库汇总天机机械臂、XRoboToolkit/PICO 遥操、MuJoCo 仿真及相关 SDK 示例。
-主要遥操工程位于 [`xrobotoolkit-marvin-teleop/`](xrobotoolkit-marvin-teleop/)。
+```text
+XR → 在线 A/A scale 标定/读取 → 位姿映射
+   → Marvin SDK IK → 遥操目标 / 自动回位
+   → set_joint_cmd_pose(A/B) 或 MuJoCo
+```
 
-## 快速开始
+项目保留一条共享控制链，提供实机与 MuJoCo 两个后端。应用层不包含 limiter；
+实机限位由 Marvin 硬件控制器负责，仿真约束来自 MJCF 模型。
+
+## 安全边界
+
+- 优先完成离线测试和 PICO → MuJoCo 验收；
+- 实机必须确认急停、A/B 关节映射、Robot 型号、Tool 和回位路径；
+- 程序退出不能替代物理急停；异常运动时优先触发急停；
+- MuJoCo 和离线测试不会加载 Marvin 控制 SDK，也不会连接机械臂。
+
+## 安装
 
 ```bash
 source /home/zxcx/TeleOp/.miniconda-xr/etc/profile.d/conda.sh
 conda activate Teleop
-cd /home/zxcx/TeleOp/xrobotoolkit-marvin-teleop
+cd /home/zxcx/TeleOp/xr-marvin-teleop
+python -m pip install -e .
 ```
 
-先启动 XRoboToolkit PC Service，再在 PICO 中配置主机局域网 IPv4，开启
-`Head`、`Controller` 和 `Send`，然后运行 MuJoCo 仿真：
+## PICO → MuJoCo
+
+PICO 已连接且 `Head/Controller/Send` 打开后运行：
 
 ```bash
 python scripts/simulation/teleop_marvin_mujoco.py --scale-factor 0.5
 ```
 
-## 开发与操作文档
+## 日志回放
 
-- [简洁版开发流程与操作指南](xrobotoolkit-marvin-teleop/docs/简洁版开发流程与操作指南.md)：日常修改、测试、仿真和实机启动清单。
-- [环境部署与 PICO 联调流程](xrobotoolkit-marvin-teleop/docs/XRoboToolkit环境部署与PICO联调流程.md)：PC Service、PICO 配网、双网卡及故障排查 SOP。
-- [Marvin 控制与测试调参指南](xrobotoolkit-marvin-teleop/docs/Marvin机械臂控制与测试调参指南.md)：控制参数、限幅、回位和实机验收。
-- [开发计划](xrobotoolkit-marvin-teleop/docs/XR-Robotics天机双臂VR遥操开发计划.md)：设计依据、参数推导和未关闭风险。
-
-## 安全要求
-
-自动测试和 MuJoCo 通过不等于实机验收通过。首次接入真机前，必须确认机械臂型号、
-A/B 关节映射、Tool 参数、网络路由和物理急停，并由现场观察员执行低速单臂测试。
-未经确认不要运行带 `--enable-hardware` 的入口；出现失控趋势时优先按物理急停。
-
-## 验证
+实机与仿真默认把控制周期写入 `logs/*.jsonl`：
 
 ```bash
-cd /home/zxcx/TeleOp/xrobotoolkit-marvin-teleop
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-  python -m pytest -q tests/test_marvin_hardware.py tests/test_marvin_mujoco_model.py
+python scripts/simulation/replay_marvin_log.py \
+  logs/marvin_hardware_<timestamp>.jsonl \
+  --source command
 ```
 
-根项目使用独立 Git 元数据目录（平台挂载的 `.git` 不可写），执行 Git 命令时请使用：
+使用 `--source feedback` 回放反馈状态；无窗口验证追加 `--headless`。
+
+## 实机启动
+
+仅在测试和现场确认全部通过后运行：
 
 ```bash
-git --git-dir=/home/zxcx/TeleOp/.teleop-git --work-tree=/home/zxcx/TeleOp status
+python scripts/hardware/teleop_marvin_hardware.py \
+  --enable-hardware \
+  --confirmed-estop \
+  --confirmed-joint-mapping \
+  --confirmed-robot-model "M6S-Lite-CCS-680-B"
 ```
+
+默认 K 为 `5 5 5 5 4 3 3`，D 为 `0.3 0.3 0.3 0.3 0.3 0.3 0.3`。覆盖参数使用
+`--left-k/--left-d/--right-k/--right-d`，未经现场批准不要调节。
+实机默认按 SDK 的 PD 遥操建议使用 `200 Hz / 5 ms`，并在进入关节阻抗前为
+双臂设置调试值 `velRatio=10`、`AccRatio=10`。充分测试后才能手动提高。需要覆盖时使用
+`--control-hz`、`--joint-velocity-ratio` 和 `--joint-acceleration-ratio`。
+控制参数、模式和 PD 前馈设置后分别等待 `0.2 s / 1 s / 1 s` 并复核反馈。
+
+## 文档
+
+- [测试流程](docs/testing.md)
+- [MuJoCo 仿真流程](docs/simulation.md)
+- [项目结构、模块职责与命名](docs/project-structure.md)
+- [Marvin MuJoCo 资产说明](assets/marvin/README.md)
