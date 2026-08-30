@@ -7,3 +7,8 @@ __pycache__/
 .vscode/
 *.mjb
 .coverage
+
+# External workspace projects
+/tianji/
+/ros2_ws/
+/xrobotoolkit-marvin-teleop/
