@@ -1,1 +1,0 @@
-"""Marvin vendor SDK adapters."""

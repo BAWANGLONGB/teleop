@@ -1,14 +1,68 @@
-__pycache__/
-*.py[cod]
-*.so
-*.egg-info/
-.pytest_cache/
+# Local interpreters and package managers
+.miniconda-xr/
+.conda-envs/
+.conda-pkgs/
 .venv/
-.vscode/
-*.mjb
-.coverage
+.venv.*
+.mamba-root/
+.cache/
+.tools/
 
-# External workspace projects
+# Git/Codex/editor metadata
+**/.git/
+.teleop-git/
+.agents/
+.codex/
+.codex_docx_review/
+.sync-backup-20260826/
+.pytest_cache/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.idea/
+.vscode/
+
+# Generated runtime data and build outputs
+**/logs/
+**/build/
+**/install/
+**/log/
+**/dependencies/
+**/dist/
+**/.pytest_cache/
+*.log
+*.jsonl
+*.csv
+*.npz
+*.npy
+
+# Vendor archives and CAD exports are kept outside the Git project.
+*.zip
+*.rar
+*.7z
+*.step
+*.STEP
+*.stp
+*.STP
+
+# Nested repositories are kept as local source snapshots, not Gitlinks.
+tianji/TJ_FX_ROBOT_CONTRL_SDK/
+tianji/roboavatar/
+
+# Native/binary SDK build artifacts
+*.so
+*.dll
+*.dylib
+TJArm/tj_fx_robot-master/MarvinPlatform_EN/MarvinPlatform_*
+TJArm/tj_fx_robot-master/SDK_PYTHON/libMarvinSDK.so
+
+# Projects outside the maintained cloud snapshot
 /tianji/
 /ros2_ws/
 /xrobotoolkit-marvin-teleop/
+/xrobotoolkit-marvin-teleop.backup-*/
+
+# Keep current Marvin teleoperation logs in the cloud snapshot.
+!/xr-marvin-teleop/logs/
+!/xr-marvin-teleop/logs/*.jsonl
+!/xr-marvin-teleop/logs/marvin_scale_calibration.json
