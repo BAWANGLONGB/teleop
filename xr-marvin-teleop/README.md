@@ -2,7 +2,7 @@
 
 ```text
 XR → 在线 A/A scale 标定/读取 → 位姿映射
-   → Marvin SDK IK → 遥操目标 / 自动回位
+   → Marvin SDK IK → 遥操目标 / B 键回位
    → set_joint_cmd_pose(A/B) 或 MuJoCo
 ```
 
@@ -19,11 +19,16 @@ XR → 在线 A/A scale 标定/读取 → 位姿映射
 ## 安装
 
 ```bash
+sudo apt-get install build-essential pybind11-dev libjson-c-dev
 source /home/zxcx/TeleOp/.miniconda-xr/etc/profile.d/conda.sh
 conda activate Teleop
 cd /home/zxcx/TeleOp/xr-marvin-teleop
-python -m pip install -e .
+python -m pip install -e . --no-build-isolation
 ```
+
+安装会编译项目内的原子 XR 快照 binding，并链接默认位置
+`/opt/apps/roboticsservice/SDK`。SDK 位于其他目录时设置
+`XROBOTOOLKIT_SDK_ROOT` 和 `XROBOTOOLKIT_SDK_LIBRARY_DIR`。
 
 ## PICO → MuJoCo
 

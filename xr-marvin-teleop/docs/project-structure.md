@@ -6,6 +6,9 @@
 xr-marvin-teleop/
 ├── README.md
 ├── pyproject.toml
+├── setup.py
+├── native/
+│   └── xrobotoolkit_sdk.cpp
 ├── docs/
 │   ├── testing.md
 │   ├── simulation.md
@@ -45,14 +48,15 @@ xr-marvin-teleop/
 
 | 模块 | 职责 |
 | --- | --- |
-| `common/xr_client.py` | 初始化 XRoboToolkit、读取一致快照、检查时间戳新鲜度 |
+| `native/xrobotoolkit_sdk.cpp` | 在 SDK JSON 回调中组装整帧，并通过一个 mutex 原子发布 |
+| `common/xr_client.py` | 读取原子快照，检查时间戳新鲜度和断流状态 |
 | `common/xr_target_mapper.py` | OpenXR → Marvin 坐标转换、Grip 锚点和 scale 位姿映射 |
 | `common/marvin_scale_calibration.py` | A/A 两点在线臂长 scale 标定、保存与读取 |
-| `common/marvin_postures.py` | A/B 初始及自动回位关节姿态 |
+| `common/marvin_postures.py` | B 键回位的 A/B 初始关节姿态 |
 | `common/marvin_session_logger.py` | 非阻塞 JSONL 控制周期日志与回放记录读取 |
 | `hardware/interface/marvin_kinematics.py` | 厂家 FK/IK 的米/弧度边界和 IK 异常解释 |
 | `hardware/interface/marvin.py` | 控制 SDK 连接、反馈预热、速度/加速度、K/D、Tool 和 `set_joint_cmd_pose(A/B)` |
-| `hardware/marvin_teleop_controller.py` | 共享遥操状态、IK、自动回位和最终关节目标 |
+| `hardware/marvin_teleop_controller.py` | 共享遥操状态、IK、B 键回位和最终关节目标 |
 | `simulation/marvin_mujoco_adapter.py` | 用 MuJoCo 实现与硬件适配器相同的最小控制接口 |
 | `scripts/hardware/...` | 实机确认参数、依赖组装和启动入口 |
 | `scripts/simulation/teleop_...` | PICO → MuJoCo 组装和启动入口 |
@@ -62,7 +66,8 @@ xr-marvin-teleop/
 ## 3. 最小闭环
 
 ```text
-XrClient.read_snapshot()
+PXREADeviceStateJson → native get_snapshot()
+  → XrClient.read_snapshot()
   → transform_controller_poses_to_marvin_frame()
   → XrTargetMapper.map_arm()
   → MarvinVendorKinematics.ik_world()
@@ -73,8 +78,9 @@ XrClient.read_snapshot()
        → MuJoCo position actuators
 ```
 
-Grip 松开时不再生成遥操 IK 目标，而是由同一控制器生成返回初始姿态的 3 秒
-余弦关节轨迹。应用层没有 limiter。
+Grip 松开时锁存当前反馈关节姿态并清除遥操锚点；再次按下会从新的手柄位置和
+机器人 TCP 继续。双 Grip 松开后按 B，控制器才生成返回初始姿态的 3 秒余弦
+关节轨迹。应用层没有 limiter。
 
 手柄位姿使用固定 OpenXR tracking space，不使用头显位置或朝向：OpenXR
 `-Z/+X/+Y`（前/右/上）分别映射到 Marvin `-X/+Y/+Z`。每只手第一次按下
@@ -85,7 +91,7 @@ Grip 时记录当前手柄位姿和当前机器人 TCP；按住期间只映射�
 
 | 边界 | 加载内容 | 是否连接机械臂 |
 | --- | --- | --- |
-| XR | `xrobotoolkit_sdk` | 否 |
+| XR | 项目内 `_xrobotoolkit_sdk` + `/opt/apps/roboticsservice/SDK` | 否 |
 | 运动学 | `fx_kine.py`、`libKine.so`、`ccs_680.MvKDCfg` | 否 |
 | MuJoCo | `mujoco`、Marvin MJCF/meshes | 否 |
 | 实机控制 | `fx_robot.py`、`libMarvinSDK.so`、`robot.ini` | 是 |

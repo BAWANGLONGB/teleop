@@ -18,11 +18,13 @@
 ## 2. 环境检查
 
 ```bash
+sudo apt-get install build-essential pybind11-dev libjson-c-dev
 source /home/zxcx/TeleOp/.miniconda-xr/etc/profile.d/conda.sh
 conda activate Teleop
 cd /home/zxcx/TeleOp/xr-marvin-teleop
-python -m pip install -e .
+python -m pip install -e . --no-build-isolation
 python -c "import mujoco, numpy; print('environment OK')"
+python -c "from xr_marvin_teleop import _xrobotoolkit_sdk; print(_xrobotoolkit_sdk.__file__)"
 ```
 
 检查三个入口只解析参数、不连接设备：
@@ -74,14 +76,18 @@ PY
 
 按[仿真流程](simulation.md)启动后依次验证：
 
-1. 双 Grip 松开时，双臂保持或自动回到初始姿态；
+1. 双 Grip 松开时，双臂保持当前位置；
 2. 左右 Grip 分别只控制对应 A/B 臂；
 3. 手柄缓慢平移时，TCP 方向和 scale 符合预期；
 4. 手柄保持静止时，关节目标无可见跳变；
-5. 松开 Grip 后，3 秒余弦轨迹自动回位；
-6. 双臂下垂/前伸两次按 A，在线 scale 更新并持久化；
-7. 关闭 PICO `Send` 后，XR 陈旧数据使流程终止；
-8. 使用日志的 `command` 与 `feedback` 两种模式完成回放。
+5. 双 Grip 松开后按 B，双臂沿 3 秒余弦轨迹回位；
+6. B 回位不清除已采集的第一帧 scale 标定；
+7. 双臂下垂/前伸两次按 A，在线 scale 更新并持久化；
+8. 关闭 PICO `Send` 后，短时陈旧数据保持关节目标，恢复时 Grip 重新锚定；持续断流后流程终止；
+9. 使用日志的 `command` 与 `feedback` 两种模式完成回放。
+
+默认时间戳连续 `0.5 s` 不推进时进入保持/重新锚定状态，连续 `2.0 s` 不推进时
+判定连接中断并结束控制。
 
 任一项失败，保持在 MuJoCo 阶段，不进入实机。
 
@@ -92,7 +98,7 @@ PY
 - 全量自动测试通过；
 - PICO-only 与 PICO → MuJoCo 全部通过；
 - 现场确认 SDK A/B、14 轴顺序和正方向；
-- 当前 Tool、初始位姿和自动回位路径与实物一致；
+- 当前 Tool、初始位姿和 B 键回位路径与实物一致；
 - 机械臂静止、无错误，其他 SDK 客户端已退出；
 - 物理急停已测试，观察员可立即触发。
 

@@ -51,74 +51,42 @@ class XrSnapshot:
 
 
 class XrClient:
-    """Synchronous XRoboToolkit client for the minimal PICO input set."""
+    """Read atomic PICO frames from the project-owned XRoboToolkit binding."""
 
-    def __init__(self, xr_sdk=None, max_source_age_seconds=0.1):
+    def __init__(
+        self,
+        xr_sdk=None,
+        max_source_age_seconds=0.5,
+        source_disconnect_timeout_seconds=2.0,
+    ):
         if max_source_age_seconds <= 0.0:
             raise ValueError("max_source_age_seconds must be positive")
+        if source_disconnect_timeout_seconds <= max_source_age_seconds:
+            raise ValueError(
+                "source_disconnect_timeout_seconds must exceed "
+                "max_source_age_seconds"
+            )
         if xr_sdk is None:
-            import xrobotoolkit_sdk as xr_sdk
+            from xr_marvin_teleop import _xrobotoolkit_sdk as xr_sdk
+        if not hasattr(xr_sdk, "get_snapshot"):
+            raise TypeError("XR SDK must provide atomic get_snapshot()")
 
         self._xr_sdk = xr_sdk
         self._max_source_age_ns = int(max_source_age_seconds * 1e9)
+        self._source_disconnect_timeout_ns = int(
+            source_disconnect_timeout_seconds * 1e9
+        )
         self._last_source_timestamp_ns = None
         self._source_timestamp_change_monotonic_ns = None
         self._is_closed = False
         self._xr_sdk.init()
         print("XRoboToolkit SDK initialized; waiting for PICO data.")
 
-    def get_pose_by_name(self, name):
-        getters = {
-            "headset": self._xr_sdk.get_headset_pose,
-            "left_controller": self._xr_sdk.get_left_controller_pose,
-            "right_controller": self._xr_sdk.get_right_controller_pose,
-        }
-        if name not in getters:
-            raise ValueError(f"unsupported XR pose: {name}")
-        return getters[name]()
+    def _capture_snapshot(self):
+        values = self._xr_sdk.get_snapshot()
+        return None if values is None else XrSnapshot(**values)
 
-    def get_key_value_by_name(self, name):
-        getters = {
-            "left_grip": self._xr_sdk.get_left_grip,
-            "right_grip": self._xr_sdk.get_right_grip,
-        }
-        if name not in getters:
-            raise ValueError(f"unsupported XR key: {name}")
-        return float(getters[name]())
-
-    def get_button_state_by_name(self, name):
-        getters = {
-            "A": self._xr_sdk.get_A_button,
-            "B": self._xr_sdk.get_B_button,
-        }
-        if name not in getters:
-            raise ValueError(f"unsupported XR button: {name}")
-        return bool(getters[name]())
-
-    def get_timestamp_ns(self):
-        return int(self._xr_sdk.get_time_stamp_ns())
-
-    def _capture_consistent_snapshot(self):
-        for _ in range(3):
-            timestamp_before_ns = self.get_timestamp_ns()
-            snapshot = XrSnapshot(
-                timestamp_ns=timestamp_before_ns,
-                headset_pose=self.get_pose_by_name("headset"),
-                left_controller_pose=self.get_pose_by_name("left_controller"),
-                right_controller_pose=self.get_pose_by_name("right_controller"),
-                grip_values=(
-                    self.get_key_value_by_name("left_grip"),
-                    self.get_key_value_by_name("right_grip"),
-                ),
-                button_a=self.get_button_state_by_name("A"),
-                button_b=self.get_button_state_by_name("B"),
-            )
-            timestamp_after_ns = self.get_timestamp_ns()
-            if timestamp_before_ns > 0 and timestamp_before_ns == timestamp_after_ns:
-                return snapshot
-        raise RuntimeError("PICO XR frame changed while reading one snapshot")
-
-    def _require_fresh_timestamp(self, timestamp_ns):
+    def _timestamp_is_usable(self, timestamp_ns):
         now_ns = time.monotonic_ns()
         if (
             self._last_source_timestamp_ns is not None
@@ -128,13 +96,11 @@ class XrClient:
         if timestamp_ns != self._last_source_timestamp_ns:
             self._last_source_timestamp_ns = timestamp_ns
             self._source_timestamp_change_monotonic_ns = now_ns
-            return
-        if (
-            self._source_timestamp_change_monotonic_ns is None
-            or now_ns - self._source_timestamp_change_monotonic_ns
-            > self._max_source_age_ns
-        ):
-            raise TimeoutError("PICO XR stream is stale")
+            return True
+        source_age_ns = now_ns - self._source_timestamp_change_monotonic_ns
+        if source_age_ns > self._source_disconnect_timeout_ns:
+            raise TimeoutError("PICO XR stream disconnected")
+        return source_age_ns <= self._max_source_age_ns
 
     def wait_for_fresh_snapshot(self, timeout_seconds=2.0):
         deadline = time.monotonic() + timeout_seconds
@@ -142,15 +108,16 @@ class XrClient:
         last_error = None
         while time.monotonic() < deadline:
             try:
-                snapshot = self._capture_consistent_snapshot()
+                snapshot = self.read_snapshot()
                 if (
-                    previous_timestamp_ns is not None
+                    snapshot is not None
+                    and previous_timestamp_ns is not None
                     and snapshot.timestamp_ns > previous_timestamp_ns
                 ):
-                    self._require_fresh_timestamp(snapshot.timestamp_ns)
                     print("PICO XR stream ready.")
                     return snapshot
-                previous_timestamp_ns = snapshot.timestamp_ns
+                if snapshot is not None:
+                    previous_timestamp_ns = snapshot.timestamp_ns
             except Exception as error:
                 last_error = error
             time.sleep(0.01)
@@ -160,9 +127,10 @@ class XrClient:
         ) from last_error
 
     def read_snapshot(self):
-        snapshot = self._capture_consistent_snapshot()
-        self._require_fresh_timestamp(snapshot.timestamp_ns)
-        return snapshot
+        snapshot = self._capture_snapshot()
+        if snapshot is None:
+            return None
+        return snapshot if self._timestamp_is_usable(snapshot.timestamp_ns) else None
 
     def close(self):
         if not self._is_closed:

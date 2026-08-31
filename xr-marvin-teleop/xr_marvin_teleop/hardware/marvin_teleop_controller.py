@@ -18,7 +18,7 @@ from xr_marvin_teleop.common.xr_target_mapper import (
 
 DEFAULT_JOINT_K = (5.0, 5.0, 5.0, 5.0, 4.0, 3.0, 3.0)
 DEFAULT_JOINT_D = (0.3,) * 7
-DEFAULT_CONTROL_HZ = 50.0
+DEFAULT_CONTROL_HZ = 200.0
 DEFAULT_JOINT_VELOCITY_RATIO = 10
 DEFAULT_JOINT_ACCELERATION_RATIO = 10
 MAX_CONSECUTIVE_STALE_FEEDBACK_CYCLES = 3
@@ -119,11 +119,11 @@ class MarvinHardwareTeleopController:
         self._previous_button_b = False
         self._return_start_times = [None, None]
         self._return_start_q_rad = [None, None]
-        self._start_return_on_next_cycle = [True, True]
         self._last_commanded_q_rad = None
         self._last_ik_q_rad = [None, None]
         self._last_feedback_frame_serial = None
         self._stale_feedback_cycle_counts = [0, 0]
+        self._xr_frame_available = False
         self._hardware_prepared = False
 
     @property
@@ -243,9 +243,10 @@ class MarvinHardwareTeleopController:
         self._stale_feedback_cycle_counts = [0, 0]
         self._previous_button_a = startup_xr_snapshot.button_a
         self._previous_button_b = startup_xr_snapshot.button_b
+        self._xr_frame_available = True
         self._hardware_prepared = True
 
-    def _process_scale_calibration(
+    def _process_controls(
         self, xr_snapshot, controller_poses_marvin, grip_states, robot_feedback
     ):
         button_a_pressed = xr_snapshot.button_a and not self._previous_button_a
@@ -253,11 +254,15 @@ class MarvinHardwareTeleopController:
         self._previous_button_a = xr_snapshot.button_a
         self._previous_button_b = xr_snapshot.button_b
 
-        if button_b_pressed and not any(grip_states):
-            self.scale_calibrator.reset()
-            print("Scale calibration reset.")
+        reset_requested = button_b_pressed and not any(grip_states)
+        if button_b_pressed:
+            print(
+                "Robot reset requested."
+                if reset_requested
+                else "Robot reset ignored: release both Grip controls."
+            )
         if not button_a_pressed:
-            return
+            return reset_requested
         if (
             any(grip_states)
             or any(start_time is not None for start_time in self._return_start_times)
@@ -267,7 +272,7 @@ class MarvinHardwareTeleopController:
                 "Scale calibration ignored: release Grip and wait for return "
                 "to finish."
             )
-            return
+            return reset_requested
         controller_positions = {
             "left": controller_poses_marvin[0][0],
             "right": controller_poses_marvin[1][0],
@@ -278,16 +283,17 @@ class MarvinHardwareTeleopController:
             )
         except ValueError as calibration_error:
             print(f"Scale calibration sample rejected: {calibration_error}")
-            return
+            return reset_requested
         if calibration_result.status == "down_captured":
             print(
                 "Scale calibration: down pose captured; extend both arms and "
                 "press A."
             )
-            return
+            return reset_requested
         save_scale_calibration(self.scale_calibration_path, calibration_result)
         self.pose_mapper.scale_factor = calibration_result.scale_factor
         print(f"Scale calibration applied: {calibration_result.scale_factor:.6f}")
+        return reset_requested
 
     def _compute_q_command(
         self,
@@ -302,7 +308,7 @@ class MarvinHardwareTeleopController:
             value > self.grip_activation_threshold
             for value in xr_snapshot.grip_values
         )
-        self._process_scale_calibration(
+        reset_requested = self._process_controls(
             xr_snapshot, controller_poses_marvin, grip_states, robot_feedback
         )
 
@@ -317,7 +323,6 @@ class MarvinHardwareTeleopController:
             if is_grip_active:
                 self._return_start_times[arm_index] = None
                 self._return_start_q_rad[arm_index] = None
-                self._start_return_on_next_cycle[arm_index] = False
                 target_tcp_transform = self.pose_mapper.map_arm(
                     arm_index,
                     controller_poses_marvin[arm_index],
@@ -351,18 +356,14 @@ class MarvinHardwareTeleopController:
                 current_tcp_transform,
                 False,
             )
-            if (
-                self._previous_grip_states[arm_index]
-                or self._start_return_on_next_cycle[arm_index]
-            ):
+            if reset_requested:
                 self._return_start_times[arm_index] = cycle_time_seconds
                 self._return_start_q_rad[arm_index] = arm_q_rad.copy()
-                self._start_return_on_next_cycle[arm_index] = False
+            elif self._previous_grip_states[arm_index]:
+                q_command_rad[arm_joint_slice] = arm_q_rad
+                self._last_ik_q_rad[arm_index] = arm_q_rad.copy()
             return_start_time = self._return_start_times[arm_index]
             if return_start_time is None:
-                q_command_rad[arm_joint_slice] = self.initial_pose_q_rad[
-                    arm_joint_slice
-                ]
                 continue
 
             return_progress = min(
@@ -401,6 +402,27 @@ class MarvinHardwareTeleopController:
         robot_feedback = self.adapter.read_state()
         self._require_healthy_feedback(robot_feedback, True)
         self._require_advancing_feedback(robot_feedback)
+        if xr_snapshot is None:
+            if self._xr_frame_available:
+                print("PICO XR frame stale; holding joint targets.")
+            self._xr_frame_available = False
+            self.pose_mapper.reset_arm()
+            self._previous_grip_states = (False, False)
+            self._previous_button_a = True
+            self._previous_button_b = True
+            q_command_rad = self._last_commanded_q_rad.copy()
+            self.adapter.send_joint_command(q_command_rad)
+            if self.session_logger is not None:
+                self.session_logger.record_control_cycle(
+                    None,
+                    robot_feedback,
+                    q_command_rad,
+                    self.scale_factor,
+                )
+            return q_command_rad
+        if not self._xr_frame_available:
+            print("PICO XR stream recovered; Grip origins will be re-anchored.")
+        self._xr_frame_available = True
         q_command_rad = self._compute_q_command(
             xr_snapshot, robot_feedback, float(cycle_time_seconds)
         )
@@ -439,7 +461,7 @@ class MarvinHardwareTeleopController:
             self.prepare_hardware()
             print(
                 "Marvin teleoperation active: Grip controls each arm; "
-                "A/A calibrates scale."
+                "A/A calibrates scale; B resets both arms."
             )
             while maximum_cycles is None or completed_cycles < maximum_cycles:
                 is_running = getattr(self.adapter, "is_running", None)

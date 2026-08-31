@@ -80,13 +80,20 @@ class MarvinSessionLogger:
             "schema_version": 1,
             "event": "control_cycle",
             "monotonic_time_ns": time.monotonic_ns(),
-            "xr_timestamp_ns": xr_snapshot.timestamp_ns,
-            "headset_pose": xr_snapshot.headset_pose,
-            "left_controller_pose": xr_snapshot.left_controller_pose,
-            "right_controller_pose": xr_snapshot.right_controller_pose,
-            "grip_values": xr_snapshot.grip_values,
-            "button_a": xr_snapshot.button_a,
-            "button_b": xr_snapshot.button_b,
+            "xr_frame_valid": xr_snapshot is not None,
+            "xr_timestamp_ns": (
+                None if xr_snapshot is None else xr_snapshot.timestamp_ns
+            ),
+            "headset_pose": None if xr_snapshot is None else xr_snapshot.headset_pose,
+            "left_controller_pose": (
+                None if xr_snapshot is None else xr_snapshot.left_controller_pose
+            ),
+            "right_controller_pose": (
+                None if xr_snapshot is None else xr_snapshot.right_controller_pose
+            ),
+            "grip_values": None if xr_snapshot is None else xr_snapshot.grip_values,
+            "button_a": None if xr_snapshot is None else xr_snapshot.button_a,
+            "button_b": None if xr_snapshot is None else xr_snapshot.button_b,
             "scale_factor": scale_factor,
             "frame_serial": robot_feedback.frame_serial,
             "arm_state": robot_feedback.arm_state,

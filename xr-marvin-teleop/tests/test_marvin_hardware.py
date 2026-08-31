@@ -52,31 +52,20 @@ class FakeXrSdk:
     def init(self):
         self.initialized = True
 
-    def get_time_stamp_ns(self):
+    def get_snapshot(self):
         if len(self.timestamps) > 1:
-            return self.timestamps.pop(0)
-        return self.timestamps[0]
-
-    def get_headset_pose(self):
-        return make_openxr_pose()
-
-    def get_left_controller_pose(self):
-        return make_openxr_pose(-0.1)
-
-    def get_right_controller_pose(self):
-        return make_openxr_pose(0.1)
-
-    def get_left_grip(self):
-        return 0.0
-
-    def get_right_grip(self):
-        return 0.0
-
-    def get_A_button(self):
-        return False
-
-    def get_B_button(self):
-        return False
+            timestamp_ns = self.timestamps.pop(0)
+        else:
+            timestamp_ns = self.timestamps[0]
+        return {
+            "timestamp_ns": timestamp_ns,
+            "headset_pose": make_openxr_pose(),
+            "left_controller_pose": make_openxr_pose(-0.1),
+            "right_controller_pose": make_openxr_pose(0.1),
+            "grip_values": (0.0, 0.0),
+            "button_a": False,
+            "button_b": False,
+        }
 
     def close(self):
         self.closed = True
@@ -265,16 +254,25 @@ class TestMarvinHardware(unittest.TestCase):
         stale_sdk = FakeXrSdk([7])
         with patch("builtins.print"), patch(
             "xr_marvin_teleop.common.xr_client.time.monotonic_ns",
-            side_effect=(100, 102),
+            side_effect=(100, 102, 103),
         ):
             stale_client = XrClient(
                 xr_sdk=stale_sdk,
                 max_source_age_seconds=1e-9,
+                source_disconnect_timeout_seconds=2e-9,
             )
             stale_client.read_snapshot()
+            self.assertIsNone(stale_client.read_snapshot())
             with self.assertRaises(TimeoutError):
                 stale_client.read_snapshot()
         stale_client.close()
+
+        class NonAtomicSdk:
+            def init(self):
+                pass
+
+        with self.assertRaisesRegex(TypeError, "atomic get_snapshot"):
+            XrClient(xr_sdk=NonAtomicSdk())
 
     def test_scale_calibration_and_mapping(self):
         calibrator = ArmLengthScaleCalibrator()
@@ -716,7 +714,7 @@ class TestMarvinHardware(unittest.TestCase):
             np.testing.assert_allclose(adapter.data.ctrl, q_command_rad)
             controller.shutdown_hardware()
 
-    def test_teleoperation_cycle_sends_ik_and_automatic_return(self):
+    def test_release_holds_and_b_resets_robot_without_resetting_calibration(self):
         released_snapshot = XrSnapshot(
             1,
             make_openxr_pose(),
@@ -726,8 +724,17 @@ class TestMarvinHardware(unittest.TestCase):
             False,
             False,
         )
-        active_anchor_snapshot = XrSnapshot(
+        calibration_down_snapshot = XrSnapshot(
             2,
+            make_openxr_pose(),
+            make_openxr_pose(),
+            make_openxr_pose(),
+            (0.0, 0.0),
+            True,
+            False,
+        )
+        active_anchor_snapshot = XrSnapshot(
+            3,
             make_openxr_pose(),
             make_openxr_pose(),
             make_openxr_pose(),
@@ -736,7 +743,7 @@ class TestMarvinHardware(unittest.TestCase):
             False,
         )
         active_moved_snapshot = XrSnapshot(
-            3,
+            4,
             make_openxr_pose(),
             make_openxr_pose(x_meters=0.1),
             make_openxr_pose(),
@@ -745,7 +752,7 @@ class TestMarvinHardware(unittest.TestCase):
             False,
         )
         active_unreachable_snapshot = XrSnapshot(
-            4,
+            5,
             make_openxr_pose(),
             make_openxr_pose(x_meters=0.2),
             make_openxr_pose(),
@@ -753,14 +760,64 @@ class TestMarvinHardware(unittest.TestCase):
             False,
             False,
         )
+        regrip_anchor_snapshot = XrSnapshot(
+            6,
+            make_openxr_pose(),
+            make_openxr_pose(x_meters=0.4),
+            make_openxr_pose(),
+            (1.0, 0.0),
+            False,
+            False,
+        )
+        regrip_moved_snapshot = XrSnapshot(
+            7,
+            make_openxr_pose(),
+            make_openxr_pose(x_meters=0.5),
+            make_openxr_pose(),
+            (1.0, 0.0),
+            False,
+            False,
+        )
+        reset_snapshot = XrSnapshot(
+            8,
+            make_openxr_pose(),
+            make_openxr_pose(),
+            make_openxr_pose(),
+            (0.0, 0.0),
+            False,
+            True,
+        )
+        calibration_forward_snapshot = XrSnapshot(
+            9,
+            make_openxr_pose(),
+            make_openxr_pose(
+                y_meters=0.664989,
+                z_meters=-0.558866,
+            ),
+            make_openxr_pose(
+                y_meters=0.664989,
+                z_meters=-0.558866,
+            ),
+            (0.0, 0.0),
+            True,
+            False,
+        )
         xr_client = FakeXRClient(
             [
+                released_snapshot,
+                calibration_down_snapshot,
                 released_snapshot,
                 active_anchor_snapshot,
                 active_moved_snapshot,
                 active_unreachable_snapshot,
                 released_snapshot,
+                regrip_anchor_snapshot,
+                regrip_moved_snapshot,
                 released_snapshot,
+                reset_snapshot,
+                reset_snapshot,
+                released_snapshot,
+                calibration_forward_snapshot,
             ]
         )
         adapter = FakeMarvinSdkAdapter()
@@ -797,20 +854,139 @@ class TestMarvinHardware(unittest.TestCase):
                 ],
             )
             self.assertEqual(adapter.pd_period_milliseconds, 5)
-            controller.execute_control_cycle(0.0)
-            moved_q_rad = controller.execute_control_cycle(1.0)
+            startup_hold_q_rad = controller.execute_control_cycle(0.0)
+            np.testing.assert_allclose(startup_hold_q_rad, 0.0)
+            controller.execute_control_cycle(0.1)
+            controller.execute_control_cycle(1.0)
+            moved_q_rad = controller.execute_control_cycle(1.5)
             self.assertAlmostEqual(moved_q_rad[0], 0.05)
             kinematics.fail_inverse_kinematics = True
-            failed_ik_q_rad = controller.execute_control_cycle(1.5)
+            failed_ik_q_rad = controller.execute_control_cycle(1.75)
             self.assertAlmostEqual(failed_ik_q_rad[0], 0.05)
-            controller.execute_control_cycle(2.0)
-            returned_q_rad = controller.execute_control_cycle(5.0)
+            kinematics.fail_inverse_kinematics = False
+            adapter.q_rad[0] = 0.04
+            released_q_rad = controller.execute_control_cycle(2.0)
+            self.assertAlmostEqual(released_q_rad[0], 0.04)
+            regripped_q_rad = controller.execute_control_cycle(2.5)
+            self.assertAlmostEqual(regripped_q_rad[0], 0.04)
+            regrip_moved_q_rad = controller.execute_control_cycle(3.0)
+            self.assertAlmostEqual(regrip_moved_q_rad[0], 0.09)
+            held_q_rad = controller.execute_control_cycle(3.5)
+            self.assertAlmostEqual(held_q_rad[0], 0.09)
+
+            reset_start_q_rad = controller.execute_control_cycle(4.0)
+            np.testing.assert_allclose(reset_start_q_rad, held_q_rad)
+            reset_mid_q_rad = controller.execute_control_cycle(5.5)
+            np.testing.assert_allclose(
+                reset_mid_q_rad,
+                held_q_rad + 0.5 * (MARVIN_INITIAL_POSE_Q_RAD - held_q_rad),
+            )
+            returned_q_rad = controller.execute_control_cycle(7.0)
             np.testing.assert_allclose(returned_q_rad, MARVIN_INITIAL_POSE_Q_RAD)
+            controller.execute_control_cycle(7.1)
+            self.assertAlmostEqual(controller.scale_factor, 0.95)
             controller.shutdown_hardware()
 
         self.assertTrue(adapter.idle)
         self.assertTrue(adapter.released)
         self.assertTrue(xr_client.closed)
+
+    def test_xr_dropout_holds_target_and_reanchors_grip(self):
+        released_snapshot = XrSnapshot(
+            1,
+            make_openxr_pose(),
+            make_openxr_pose(),
+            make_openxr_pose(),
+            (0.0, 0.0),
+            False,
+            False,
+        )
+        active_anchor_snapshot = XrSnapshot(
+            2,
+            make_openxr_pose(),
+            make_openxr_pose(),
+            make_openxr_pose(),
+            (1.0, 0.0),
+            False,
+            False,
+        )
+        active_moved_snapshot = XrSnapshot(
+            3,
+            make_openxr_pose(),
+            make_openxr_pose(x_meters=0.1),
+            make_openxr_pose(),
+            (1.0, 0.0),
+            False,
+            False,
+        )
+        recovered_anchor_snapshot = XrSnapshot(
+            4,
+            make_openxr_pose(),
+            make_openxr_pose(x_meters=0.5),
+            make_openxr_pose(),
+            (1.0, 0.0),
+            False,
+            False,
+        )
+        recovered_moved_snapshot = XrSnapshot(
+            5,
+            make_openxr_pose(),
+            make_openxr_pose(x_meters=0.6),
+            make_openxr_pose(),
+            (1.0, 0.0),
+            False,
+            False,
+        )
+        controller = MarvinHardwareTeleopController(
+            xr_client=FakeXRClient(
+                [
+                    released_snapshot,
+                    active_anchor_snapshot,
+                    active_moved_snapshot,
+                    None,
+                    recovered_anchor_snapshot,
+                    recovered_moved_snapshot,
+                ]
+            ),
+            adapter=FakeMarvinSdkAdapter(),
+            kinematics=FakeMarvinVendorKinematics(),
+            scale_calibration_path=Path("unused.json"),
+            requested_scale_factor=0.5,
+            expected_sdk_version=1,
+            control_parameter_settle_seconds=0.0,
+            mode_settle_seconds=0.0,
+            pd_settle_seconds=0.0,
+        )
+        controller.prepare_hardware()
+
+        controller.execute_control_cycle(0.0)
+        moved_q_rad = controller.execute_control_cycle(0.1)
+        held_q_rad = controller.execute_control_cycle(0.2)
+        recovered_q_rad = controller.execute_control_cycle(0.3)
+        resumed_q_rad = controller.execute_control_cycle(0.4)
+
+        self.assertAlmostEqual(moved_q_rad[0], 0.05)
+        np.testing.assert_allclose(held_q_rad, moved_q_rad)
+        np.testing.assert_allclose(recovered_q_rad, moved_q_rad)
+        self.assertAlmostEqual(resumed_q_rad[0], 0.1)
+        controller.shutdown_hardware()
+
+    def test_session_log_marks_dropped_xr_frame(self):
+        adapter = FakeMarvinSdkAdapter()
+        with tempfile.TemporaryDirectory() as directory:
+            logger = MarvinSessionLogger(directory, "dropped_xr")
+            logger.record_control_cycle(
+                None,
+                adapter.read_state(),
+                np.zeros(14),
+                1.0,
+            )
+            logger.close()
+            record = read_marvin_session(logger.path)[0]
+
+        self.assertFalse(record["xr_frame_valid"])
+        self.assertIsNone(record["xr_timestamp_ns"])
+        self.assertIsNone(record["left_controller_pose"])
 
     def test_teleoperation_rejects_stale_robot_feedback(self):
         snapshot = XrSnapshot(
