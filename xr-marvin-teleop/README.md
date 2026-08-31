@@ -47,6 +47,14 @@ python scripts/simulation/replay_marvin_log.py \
 
 ## 实机启动
 
+启动 PC Service：
+
+```bash
+bash /opt/apps/roboticsservice/runService.sh
+pgrep -af RoboticsServiceProcess
+ss -lnt | grep -E ':(63901|60061)\b'
+```
+
 仅在测试和现场确认全部通过后运行：
 
 ```bash

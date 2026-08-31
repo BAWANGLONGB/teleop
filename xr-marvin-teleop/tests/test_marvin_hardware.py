@@ -302,8 +302,8 @@ class TestMarvinHardware(unittest.TestCase):
             False,
             False,
         )
-        controller_poses, head_yaw_rotation = (
-            transform_controller_poses_to_marvin_frame(xr_snapshot)
+        controller_poses = transform_controller_poses_to_marvin_frame(
+            xr_snapshot
         )
         pose_mapper = XrTargetMapper(0.5)
         current_tcp_transform = np.eye(4)
@@ -323,14 +323,95 @@ class TestMarvinHardware(unittest.TestCase):
             False,
             False,
         )
-        controller_poses, _ = transform_controller_poses_to_marvin_frame(
-            moved_snapshot, head_yaw_rotation
+        controller_poses = transform_controller_poses_to_marvin_frame(
+            moved_snapshot
         )
         target_tcp_transform = pose_mapper.map_arm(
             0, controller_poses[0], current_tcp_transform, True
         )
         np.testing.assert_allclose(
             target_tcp_transform[:3, 3], [0.0, 0.05, 0.0], atol=1e-12
+        )
+
+        changed_headset_snapshot = XrSnapshot(
+            3,
+            np.array([2.0, 3.0, 4.0, 0.0, np.sqrt(0.5), 0.0, np.sqrt(0.5)]),
+            moved_snapshot.left_controller_pose,
+            moved_snapshot.right_controller_pose,
+            (1.0, 0.0),
+            False,
+            False,
+        )
+        changed_headset_poses = transform_controller_poses_to_marvin_frame(
+            changed_headset_snapshot
+        )
+        for actual_pose, expected_pose in zip(
+            changed_headset_poses, controller_poses
+        ):
+            np.testing.assert_allclose(actual_pose[0], expected_pose[0])
+            np.testing.assert_allclose(actual_pose[1], expected_pose[1])
+
+        pose_mapper.map_arm(
+            0, controller_poses[0], current_tcp_transform, False
+        )
+        new_tcp_transform = np.eye(4)
+        new_tcp_transform[:3, 3] = [1.0, 2.0, 3.0]
+        regrip_snapshot = XrSnapshot(
+            4,
+            make_openxr_pose(),
+            make_openxr_pose(x_meters=0.4),
+            make_openxr_pose(),
+            (1.0, 0.0),
+            False,
+            False,
+        )
+        regrip_poses = transform_controller_poses_to_marvin_frame(
+            regrip_snapshot
+        )
+        np.testing.assert_allclose(
+            pose_mapper.map_arm(
+                0, regrip_poses[0], new_tcp_transform, True
+            ),
+            new_tcp_transform,
+        )
+        after_regrip_snapshot = XrSnapshot(
+            5,
+            make_openxr_pose(),
+            make_openxr_pose(x_meters=0.5),
+            make_openxr_pose(z_meters=-0.2),
+            (1.0, 1.0),
+            False,
+            False,
+        )
+        after_regrip_poses = transform_controller_poses_to_marvin_frame(
+            after_regrip_snapshot
+        )
+        after_regrip_target = pose_mapper.map_arm(
+            0, after_regrip_poses[0], new_tcp_transform, True
+        )
+        np.testing.assert_allclose(
+            after_regrip_target[:3, 3], [1.0, 2.05, 3.0], atol=1e-12
+        )
+
+        right_tcp_transform = np.eye(4)
+        right_tcp_transform[:3, 3] = [4.0, 5.0, 6.0]
+        np.testing.assert_allclose(
+            pose_mapper.map_arm(
+                1, controller_poses[1], right_tcp_transform, True
+            ),
+            right_tcp_transform,
+        )
+        right_target = pose_mapper.map_arm(
+            1, after_regrip_poses[1], right_tcp_transform, True
+        )
+        np.testing.assert_allclose(
+            right_target[:3, 3], [3.9, 5.0, 6.0], atol=1e-12
+        )
+        np.testing.assert_allclose(
+            pose_mapper.map_arm(
+                0, after_regrip_poses[0], new_tcp_transform, True
+            )[:3, 3],
+            after_regrip_target[:3, 3],
         )
 
     def test_control_sdk_converts_radians_to_vendor_degrees(self):

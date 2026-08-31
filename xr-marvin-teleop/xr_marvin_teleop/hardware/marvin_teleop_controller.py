@@ -18,7 +18,7 @@ from xr_marvin_teleop.common.xr_target_mapper import (
 
 DEFAULT_JOINT_K = (5.0, 5.0, 5.0, 5.0, 4.0, 3.0, 3.0)
 DEFAULT_JOINT_D = (0.3,) * 7
-DEFAULT_CONTROL_HZ = 200.0
+DEFAULT_CONTROL_HZ = 50.0
 DEFAULT_JOINT_VELOCITY_RATIO = 10
 DEFAULT_JOINT_ACCELERATION_RATIO = 10
 MAX_CONSECUTIVE_STALE_FEEDBACK_CYCLES = 3
@@ -114,7 +114,6 @@ class MarvinHardwareTeleopController:
         )
         self.pose_mapper = XrTargetMapper(scale_factor)
         self.scale_calibrator = ArmLengthScaleCalibrator()
-        self._head_yaw_rotation = None
         self._previous_grip_states = (False, False)
         self._previous_button_a = False
         self._previous_button_b = False
@@ -296,10 +295,8 @@ class MarvinHardwareTeleopController:
         robot_feedback,
         cycle_time_seconds,
     ):
-        controller_poses_marvin, self._head_yaw_rotation = (
-            transform_controller_poses_to_marvin_frame(
-                xr_snapshot, self._head_yaw_rotation
-            )
+        controller_poses_marvin = transform_controller_poses_to_marvin_frame(
+            xr_snapshot
         )
         grip_states = tuple(
             value > self.grip_activation_threshold

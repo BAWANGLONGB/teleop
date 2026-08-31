@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 
-DEFAULT_SCALE_FACTOR = 1.0
+DEFAULT_SCALE_FACTOR = 1.2
 MIN_SCALE_FACTOR = 0.5
 MAX_SCALE_FACTOR = 1.5
 MARVIN_REST_TO_FORWARD_TCP_DELTA = np.array([-0.558866, 0.0, 0.664989])

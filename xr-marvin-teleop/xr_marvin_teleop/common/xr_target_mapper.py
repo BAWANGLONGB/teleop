@@ -3,7 +3,7 @@ import numpy as np
 
 
 # OpenXR right/up/back -> Marvin +Y/+Z/+X.
-R_PICO_TO_MARVIN_WORLD = np.array(
+OPENXR_TO_MARVIN_ROTATION = np.array(
     [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
 )
 
@@ -15,47 +15,23 @@ def _rotation_matrix_from_openxr_pose(openxr_pose):
     return transformations.quaternion_matrix(quaternion_wxyz)[:3, :3]
 
 
-def transform_controller_poses_to_marvin_frame(
-    xr_snapshot, fallback_head_yaw_rotation=None
-):
-    """Return controller position/rotation in the Marvin head-yaw frame."""
-    headset_rotation = _rotation_matrix_from_openxr_pose(xr_snapshot.headset_pose)
-    forward = headset_rotation @ np.array([0.0, 0.0, -1.0])
-    forward[1] = 0.0
-    if np.linalg.norm(forward) < 1e-6:
-        head_yaw_rotation = (
-            np.eye(3)
-            if fallback_head_yaw_rotation is None
-            else fallback_head_yaw_rotation.copy()
-        )
-    else:
-        forward /= np.linalg.norm(forward)
-        up = np.array([0.0, 1.0, 0.0])
-        right = np.cross(forward, up)
-        right /= np.linalg.norm(right)
-        head_yaw_rotation = np.column_stack((right, up, -forward))
-
+def transform_controller_poses_to_marvin_frame(xr_snapshot):
+    """Return controller poses in the fixed OpenXR tracking frame."""
     marvin_controller_poses = []
     for controller_pose in (
         xr_snapshot.left_controller_pose,
         xr_snapshot.right_controller_pose,
     ):
-        controller_position = head_yaw_rotation.T @ (
-            controller_pose[:3] - xr_snapshot.headset_pose[:3]
-        )
-        controller_rotation = (
-            head_yaw_rotation.T
-            @ _rotation_matrix_from_openxr_pose(controller_pose)
-        )
+        controller_rotation = _rotation_matrix_from_openxr_pose(controller_pose)
         marvin_controller_poses.append(
             (
-                R_PICO_TO_MARVIN_WORLD @ controller_position,
-                R_PICO_TO_MARVIN_WORLD
+                OPENXR_TO_MARVIN_ROTATION @ controller_pose[:3],
+                OPENXR_TO_MARVIN_ROTATION
                 @ controller_rotation
-                @ R_PICO_TO_MARVIN_WORLD.T,
+                @ OPENXR_TO_MARVIN_ROTATION.T,
             )
         )
-    return tuple(marvin_controller_poses), head_yaw_rotation
+    return tuple(marvin_controller_poses)
 
 
 class XrTargetMapper:

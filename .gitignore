@@ -61,6 +61,7 @@ TJArm/tj_fx_robot-master/SDK_PYTHON/libMarvinSDK.so
 /ros2_ws/
 /xrobotoolkit-marvin-teleop/
 /xrobotoolkit-marvin-teleop.backup-*/
+/IsaacTeleop-main/
 
 # Keep current Marvin teleoperation logs in the cloud snapshot.
 !/xr-marvin-teleop/logs/
