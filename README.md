@@ -35,6 +35,21 @@ python scripts/simulation/teleop_marvin_mujoco.py
 
 ## 实机
 
+启动 PC Service：
+
+```bash
+bash /opt/apps/roboticsservice/runService.sh
+pgrep -af RoboticsServiceProcess
+ss -lnt | grep -E ':(63901|60061)\b'
+```
+
+PICO 端确认：
+
+1. Network 为 `WORKING`；
+2. `Controller`、`Send` 已打开；
+3. `Switch w/ A Button` 关闭；
+4. 头显保持唤醒，左右手柄均已连接；摘下使用时关闭自动休眠。
+
 仅在 PICO、MuJoCo、机型、A/B 关节映射、Tool 和物理急停全部确认后运行：
 
 ```bash
