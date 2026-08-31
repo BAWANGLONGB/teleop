@@ -57,6 +57,7 @@ TJArm/tj_fx_robot-master/MarvinPlatform_EN/MarvinPlatform_*
 TJArm/tj_fx_robot-master/SDK_PYTHON/libMarvinSDK.so
 
 # Projects outside the maintained cloud snapshot
+/ref/
 /tianji/
 /ros2_ws/
 /xrobotoolkit-marvin-teleop/

@@ -9,6 +9,7 @@ import numpy as np
 
 
 MARVIN_CCS_ROBOT_TYPE = 1017
+MARVIN_JOINT_4_MAXIMUM_SAFE_ANGLE_RAD = np.deg2rad(-5.0)
 DEFAULT_KINEMATICS_CONFIGURATION = Path(
     "CommonConfig/config/ccs_680.MvKDCfg"
 )
@@ -220,6 +221,10 @@ class MarvinVendorKinematics:
         )
         if q_rad.shape != (7,) or not np.all(np.isfinite(q_rad)):
             failure_reasons.append("invalid IK joint result")
+        elif q_rad[3] > MARVIN_JOINT_4_MAXIMUM_SAFE_ANGLE_RAD:
+            failure_reasons.append(
+                "joint 4 exceeds -5 degree singularity safety limit"
+            )
         return VendorIkResult(
             not failure_reasons,
             None if failure_reasons else q_rad,

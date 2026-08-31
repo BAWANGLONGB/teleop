@@ -65,6 +65,8 @@ with closing(XrClient()) as client:
     print("left_controller:", snapshot.left_controller_pose)
     print("right_controller:", snapshot.right_controller_pose)
     print("grip:", snapshot.grip_values)
+    print("trigger:", snapshot.trigger_values)
+    print("thumbstick_y:", snapshot.thumbstick_y_values)
 PY
 ```
 
@@ -85,6 +87,9 @@ PY
 7. 双臂下垂/前伸两次按 A，在线 scale 更新并持久化；
 8. 关闭 PICO `Send` 后，短时陈旧数据保持关节目标，恢复时 Grip 重新锚定；持续断流后流程终止；
 9. 使用日志的 `command` 与 `feedback` 两种模式完成回放。
+10. 左右 Trigger 分别增量闭合对应夹爪，松开后保持；摇杆后拉闭合、前推打开；
+    Trigger 与前推冲突时闭合优先。
+11. IK 返回 `J4 > -5°` 时该解被拒绝，本周期保持上一条关节命令。
 
 默认时间戳连续 `0.5 s` 不推进时进入保持/重新锚定状态，连续 `2.0 s` 不推进时
 判定连接中断并结束控制。

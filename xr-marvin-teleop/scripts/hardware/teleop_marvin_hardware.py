@@ -8,6 +8,7 @@ from xr_marvin_teleop.common.xr_client import XrClient
 from xr_marvin_teleop.hardware.interface.marvin import (
     MarvinSdkAdapter,
     load_active_tool_configs,
+    load_modbus_gripper_configurations,
 )
 from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
     MarvinVendorKinematics,
@@ -18,6 +19,8 @@ from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     DEFAULT_JOINT_D,
     DEFAULT_JOINT_K,
     DEFAULT_JOINT_VELOCITY_RATIO,
+    DEFAULT_GRIPPER_COMMAND_HZ,
+    DEFAULT_GRIPPER_RATE,
     MarvinHardwareTeleopController,
 )
 
@@ -44,6 +47,20 @@ def parse_command_line_arguments():
         "--tools-config",
         type=Path,
         default=DEFAULT_TOOLS_CONFIG,
+    )
+    parser.add_argument(
+        "--gripper-config",
+        type=Path,
+        help="validated per-arm Modbus register and position settings",
+    )
+    parser.add_argument(
+        "--gripper-rate", type=float, default=DEFAULT_GRIPPER_RATE
+    )
+    parser.add_argument(
+        "--gripper-command-hz", type=float, default=DEFAULT_GRIPPER_COMMAND_HZ
+    )
+    parser.add_argument(
+        "--thumbstick-y-sign", type=int, choices=(-1, 1), default=1
     )
     parser.add_argument("--scale-factor", type=float)
     parser.add_argument(
@@ -124,6 +141,11 @@ def main():
         active_tool_configurations = load_active_tool_configs(
             arguments.tools_config
         )
+        gripper_configurations = (
+            None
+            if arguments.gripper_config is None
+            else load_modbus_gripper_configurations(arguments.gripper_config)
+        )
         for arm_index, tool_configuration in enumerate(active_tool_configurations):
             marvin_kinematics.set_tool(
                 arm_index, tool_configuration.kinematics_mm_deg
@@ -131,6 +153,7 @@ def main():
         marvin_adapter = MarvinSdkAdapter(
             robot_ip_address=arguments.robot_ip,
             sdk_root_path=arguments.sdk_root,
+            gripper_configurations=gripper_configurations,
         )
         session_logger = MarvinSessionLogger(
             arguments.log_directory, "hardware"
@@ -153,6 +176,18 @@ def main():
             return_duration=arguments.return_duration,
             expected_sdk_version=arguments.expected_sdk_version,
             session_logger=session_logger,
+            gripper_control_enabled=gripper_configurations is not None,
+            initial_gripper_closedness=(
+                (0.0, 0.0)
+                if gripper_configurations is None
+                else tuple(
+                    config.initial_closedness
+                    for config in gripper_configurations
+                )
+            ),
+            gripper_rate=arguments.gripper_rate,
+            gripper_command_hz=arguments.gripper_command_hz,
+            thumbstick_y_sign=arguments.thumbstick_y_sign,
         )
         print(
             f"Confirmed robot model: "

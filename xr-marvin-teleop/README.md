@@ -6,8 +6,9 @@ XR → 在线 A/A scale 标定/读取 → 位姿映射
    → set_joint_cmd_pose(A/B) 或 MuJoCo
 ```
 
-项目保留一条共享控制链，提供实机与 MuJoCo 两个后端。应用层不包含 limiter；
-实机限位由 Marvin 硬件控制器负责，仿真约束来自 MJCF 模型。
+项目保留一条共享控制链，提供实机与 MuJoCo 两个后端。厂商 SDK 负责机械软限位；
+共享 IK 边界额外要求 `J4 <= -5°`，避免遥操作跨过 `J4=0°` 奇异位形。
+MuJoCo 的其余关节约束来自 MJCF 模型。
 
 ## 安全边界
 
@@ -37,6 +38,10 @@ PICO 已连接且 `Controller/Send` 打开后运行；头显摘下使用时需�
 ```bash
 python scripts/simulation/teleop_marvin_mujoco.py --scale-factor 0.5
 ```
+
+左右 Trigger 和摇杆 Y 轴采用增量夹爪控制：Trigger 或后拉闭合，前推打开，
+输入回中后保持；冲突时闭合优先。默认全行程约 `2 s`，夹爪目标最多按 `20 Hz`
+更新。当前 MuJoCo 夹爪仍是固定视觉模型，仿真会验证和记录归一化夹爪目标。
 
 ## 日志回放
 
@@ -69,6 +74,34 @@ python scripts/hardware/teleop_marvin_hardware.py \
   --confirmed-joint-mapping \
   --confirmed-robot-model "M6S-Lite-CCS-680-B"
 ```
+
+真机夹爪默认禁用。拿到夹爪厂商的 Modbus-RTU 单寄存器位置协议并完成空载验证后，
+为 `--gripper-config` 提供左右臂配置：
+
+```jsonc
+{
+  "left": {
+    "slave_id": 1,
+    "position_register": "<厂商位置寄存器>",
+    "open_position": "<全开值>",
+    "closed_position": "<全闭值>",
+    "initial_closedness": "<启动实际闭合度 0..1>",
+    "channel": 2
+  },
+  "right": {
+    "slave_id": 1,
+    "position_register": "<厂商位置寄存器>",
+    "open_position": "<全开值>",
+    "closed_position": "<全闭值>",
+    "initial_closedness": "<启动实际闭合度 0..1>",
+    "channel": 2
+  }
+}
+```
+
+尖括号是说明文字，实际文件必须替换成整数/浮点数。`channel=2/3` 分别对应
+COM1/COM2。若 PICO 摇杆前后方向相反，启动时追加 `--thumbstick-y-sign -1`。
+没有准确协议时不要提供此参数，程序不会向夹爪发送任何帧。
 
 默认 K 为 `5 5 5 5 4 3 3`，D 为 `0.3 0.3 0.3 0.3 0.3 0.3 0.3`。覆盖参数使用
 `--left-k/--left-d/--right-k/--right-d`，未经现场批准不要调节。

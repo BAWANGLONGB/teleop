@@ -31,6 +31,8 @@ struct XrSnapshot
     Pose left_controller_pose;
     Pose right_controller_pose;
     std::array<double, 2> grip_values;
+    std::array<double, 2> trigger_values;
+    std::array<double, 2> thumbstick_y_values;
     bool button_a;
     bool button_b;
 };
@@ -111,6 +113,14 @@ XrSnapshot parse_snapshot(const PXREADevStateJson& device_state)
     snapshot.grip_values = {
         json_object_get_double(require_member(left_controller, "grip")),
         json_object_get_double(require_member(right_controller, "grip")),
+    };
+    snapshot.trigger_values = {
+        json_object_get_double(require_member(left_controller, "trigger")),
+        json_object_get_double(require_member(right_controller, "trigger")),
+    };
+    snapshot.thumbstick_y_values = {
+        json_object_get_double(require_member(left_controller, "axisY")),
+        json_object_get_double(require_member(right_controller, "axisY")),
     };
     snapshot.button_a =
         json_object_get_boolean(require_member(right_controller, "primaryButton"));
@@ -195,6 +205,8 @@ py::object get_snapshot()
     result["left_controller_pose"] = snapshot->left_controller_pose;
     result["right_controller_pose"] = snapshot->right_controller_pose;
     result["grip_values"] = snapshot->grip_values;
+    result["trigger_values"] = snapshot->trigger_values;
+    result["thumbstick_y_values"] = snapshot->thumbstick_y_values;
     result["button_a"] = snapshot->button_a;
     result["button_b"] = snapshot->button_b;
     return result;

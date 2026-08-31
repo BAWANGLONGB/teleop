@@ -12,6 +12,8 @@ from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
     MarvinVendorKinematics,
 )
 from xr_marvin_teleop.hardware.marvin_teleop_controller import (
+    DEFAULT_GRIPPER_COMMAND_HZ,
+    DEFAULT_GRIPPER_RATE,
     MarvinHardwareTeleopController,
 )
 from xr_marvin_teleop.simulation.marvin_mujoco_adapter import (
@@ -42,6 +44,15 @@ def parse_command_line_arguments():
     )
     parser.add_argument("--control-hz", type=float, default=50.0)
     parser.add_argument("--return-duration", type=float, default=3.0)
+    parser.add_argument(
+        "--gripper-rate", type=float, default=DEFAULT_GRIPPER_RATE
+    )
+    parser.add_argument(
+        "--gripper-command-hz", type=float, default=DEFAULT_GRIPPER_COMMAND_HZ
+    )
+    parser.add_argument(
+        "--thumbstick-y-sign", type=int, choices=(-1, 1), default=1
+    )
     parser.add_argument(
         "--log-directory", type=Path, default=PROJECT_ROOT / "logs"
     )
@@ -81,6 +92,10 @@ def main():
             mode_settle_seconds=0.0,
             pd_settle_seconds=0.0,
             session_logger=session_logger,
+            gripper_control_enabled=True,
+            gripper_rate=arguments.gripper_rate,
+            gripper_command_hz=arguments.gripper_command_hz,
+            thumbstick_y_sign=arguments.thumbstick_y_sign,
         )
         print(f"Session log: {session_logger.path.resolve()}")
         controller.run()

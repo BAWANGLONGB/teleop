@@ -38,7 +38,7 @@ native/_xrobotoolkit_sdk ──原子快照──> XrClient
 | `common/xr_client.py` | 初始化/关闭 XR SDK；构造并校验 `XrSnapshot`；判断时间戳停滞和断流 | Grip/B/A 策略、机器人状态 |
 | `common/xr_target_mapper.py` | OpenXR 到 Marvin 坐标变换；每臂 Grip 锚定；相对 TCP 目标计算 | IK、限位、回位轨迹 |
 | `common/marvin_scale_calibration.py` | scale 来源优先级、A/A 两点标定、校验和原子持久化 | B 键回位、机器人运动 |
-| `hardware/interface/marvin_kinematics.py` | 厂商 FK/IK 的 SI 单位边界、基座坐标变换、IK 失败归一化 | 网络连接、发送关节命令 |
+| `hardware/interface/marvin_kinematics.py` | 厂商 FK/IK 的 SI 单位边界、基座坐标变换、J4 奇异安全限位、IK 失败归一化 | 网络连接、发送关节命令 |
 | `hardware/interface/marvin.py` | 实机连接、反馈、控制参数、模式切换、双臂命令事务和厂商单位换算 | 遥操状态机、XR 解释 |
 | `hardware/marvin_teleop_controller.py` | 启停顺序、健康检查、Grip/A/B 状态、IK 编排、回位和最终关节目标 | 厂商 API 细节、日志文件格式 |
 | `simulation/marvin_mujoco_adapter.py` | 用 MuJoCo 实现机器人适配器契约 | 复制一套遥操策略 |
@@ -58,6 +58,8 @@ timestamp_ns: int                         # 正整数，XR 源时间戳
 left_controller_pose: ndarray(7)          # [x,y,z,qx,qy,qz,qw]
 right_controller_pose: ndarray(7)         # 同上
 grip_values: tuple[float, float]           # [0,1]，左/右
+trigger_values: tuple[float, float]        # [0,1]，左/右
+thumbstick_y_values: tuple[float, float]   # [-1,1]，左/右
 button_a: bool
 button_b: bool
 ```
@@ -143,6 +145,7 @@ configure_control_parameters(
 enter_joint_impedance() -> None
 enable_pd_feedforward(period_milliseconds) -> None
 send_joint_command(q_rad, wait_response=False) -> None
+send_gripper_command(closedness) -> None   # 启用夹爪时必须实现
 set_idle() -> bool
 release() -> None
 ```
@@ -225,7 +228,7 @@ close() -> None
 
 `prepare_hardware()` 的顺序固定：
 
-1. 等待 XR 递增帧，并要求两侧 Grip 都不高于 `0.1`；
+1. 等待 XR 递增帧，要求两侧 Grip/Trigger 松开；启用夹爪时还要求摇杆居中；
 2. 连接 adapter，按配置检查 SDK 版本；
 3. 等待双臂递增反馈，确认无错误且双臂低速；
 4. 配置 K/D、Tool、速度和加速度百分比；
@@ -251,6 +254,11 @@ close() -> None
 | XR 暂时 stale，`read_snapshot()` 返回 `None` | 双臂保持上一目标，清除映射锚点，记录 `xr_frame_valid=false`；恢复后在当前手柄/TCP 重新锚定 |
 
 左右 Grip 独立控制两臂；一臂重新抓取只取消该臂回位，另一臂可继续回位。
+
+夹爪使用独立的归一化闭合度，`0` 为全开、`1` 为全闭。Trigger 和摇杆后拉取
+较大值增量闭合，摇杆前推增量打开，输入回中后保持；Trigger 与前推冲突时闭合
+优先。计算跟随主控制周期，实机 Modbus 位置目标最多按 `20 Hz` 下发。XR stale
+和程序退出都保持最后目标，不自动开爪。
 
 ### 5.3 B 键机器人 reset
 
@@ -321,7 +329,8 @@ scale 来源优先级为：命令行显式值 > 有效标定文件 > 默认 `1.2
 ```text
 monotonic_time_ns, xr_frame_valid, xr_timestamp_ns,
 left_controller_pose, right_controller_pose,
-grip_values, button_a, button_b, scale_factor,
+grip_values, trigger_values, thumbstick_y_values, button_a, button_b,
+gripper_command_closedness, scale_factor,
 frame_serial, arm_state, error_code,
 q_feedback_rad, dq_feedback_rad_s, q_command_rad
 ```

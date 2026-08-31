@@ -73,6 +73,7 @@ class MarvinSessionLogger:
         robot_feedback,
         q_command_rad,
         scale_factor,
+        gripper_command_closedness=None,
     ):
         if self._thread is None:
             raise RuntimeError("Marvin session logger is closed")
@@ -91,8 +92,15 @@ class MarvinSessionLogger:
                 None if xr_snapshot is None else xr_snapshot.right_controller_pose
             ),
             "grip_values": None if xr_snapshot is None else xr_snapshot.grip_values,
+            "trigger_values": (
+                None if xr_snapshot is None else xr_snapshot.trigger_values
+            ),
+            "thumbstick_y_values": (
+                None if xr_snapshot is None else xr_snapshot.thumbstick_y_values
+            ),
             "button_a": None if xr_snapshot is None else xr_snapshot.button_a,
             "button_b": None if xr_snapshot is None else xr_snapshot.button_b,
+            "gripper_command_closedness": gripper_command_closedness,
             "scale_factor": scale_factor,
             "frame_serial": robot_feedback.frame_serial,
             "arm_state": robot_feedback.arm_state,

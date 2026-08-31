@@ -23,6 +23,8 @@ class XrSnapshot:
     grip_values: tuple[float, float]
     button_a: bool
     button_b: bool
+    trigger_values: tuple[float, float] = (0.0, 0.0)
+    thumbstick_y_values: tuple[float, float] = (0.0, 0.0)
 
     def __post_init__(self):
         timestamp_ns = int(self.timestamp_ns)
@@ -46,6 +48,24 @@ class XrSnapshot:
         ):
             raise ValueError("grip_values must contain two values within [0, 1]")
         object.__setattr__(self, "grip_values", grip_values)
+        for field_name, lower_bound, upper_bound in (
+            ("trigger_values", 0.0, 1.0),
+            ("thumbstick_y_values", -1.0, 1.0),
+        ):
+            values = tuple(float(value) for value in getattr(self, field_name))
+            if (
+                len(values) != 2
+                or not np.all(np.isfinite(values))
+                or any(
+                    value < lower_bound or value > upper_bound
+                    for value in values
+                )
+            ):
+                raise ValueError(
+                    f"{field_name} must contain two values within "
+                    f"[{lower_bound:g}, {upper_bound:g}]"
+                )
+            object.__setattr__(self, field_name, values)
 
 
 class XrClient:

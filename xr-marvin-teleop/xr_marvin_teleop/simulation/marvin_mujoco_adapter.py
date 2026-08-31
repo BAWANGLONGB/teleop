@@ -65,6 +65,7 @@ class MarvinMujocoAdapter:
         self._is_released = False
         self._arm_state = (0, 0)
         self._frame_serial = 0
+        self._gripper_closedness = np.zeros(2)
 
     def _sync_viewer(self):
         if self._viewer is not None:
@@ -130,6 +131,23 @@ class MarvinMujocoAdapter:
         for _ in range(self._physics_steps):
             mujoco.mj_step(self.model, self.data)
         self._sync_viewer()
+
+    def send_gripper_command(self, closedness):
+        closedness = np.asarray(closedness, dtype=float).reshape(-1)
+        if (
+            closedness.shape != (2,)
+            or not np.all(np.isfinite(closedness))
+            or np.any(closedness < 0.0)
+            or np.any(closedness > 1.0)
+        ):
+            raise ValueError(
+                "gripper closedness must contain two values within [0, 1]"
+            )
+        self._gripper_closedness = closedness.copy()
+
+    @property
+    def gripper_closedness(self):
+        return tuple(self._gripper_closedness)
 
     def set_joint_state(self, q_rad, dq_rad_s=None):
         q_rad = _joint_vector(q_rad, "q_rad")

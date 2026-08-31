@@ -81,6 +81,59 @@ class MarvinToolConfiguration:
 
 
 @dataclass(frozen=True)
+class MarvinModbusGripperConfiguration:
+    slave_id: int
+    position_register: int
+    open_position: int
+    closed_position: int
+    initial_closedness: float
+    channel: int = 2
+
+    def __post_init__(self):
+        for field_name, lower_bound, upper_bound in (
+            ("slave_id", 1, 247),
+            ("position_register", 0, 0xFFFF),
+            ("open_position", 0, 0xFFFF),
+            ("closed_position", 0, 0xFFFF),
+        ):
+            value = getattr(self, field_name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, np.integer))
+                or not lower_bound <= value <= upper_bound
+            ):
+                raise ValueError(
+                    f"{field_name} must be an integer within "
+                    f"[{lower_bound}, {upper_bound}]"
+                )
+            object.__setattr__(self, field_name, int(value))
+        if self.open_position == self.closed_position:
+            raise ValueError("gripper open and closed positions must differ")
+        initial_closedness = float(self.initial_closedness)
+        if (
+            not np.isfinite(initial_closedness)
+            or not 0.0 <= initial_closedness <= 1.0
+        ):
+            raise ValueError("initial_closedness must be within [0, 1]")
+        object.__setattr__(self, "initial_closedness", initial_closedness)
+        if isinstance(self.channel, bool) or self.channel not in (2, 3):
+            raise ValueError("gripper channel must be COM1 (2) or COM2 (3)")
+        object.__setattr__(self, "channel", int(self.channel))
+
+
+def _modbus_write_single_register_frame(slave_id, register, value):
+    frame = bytes((slave_id, 0x06)) + int(register).to_bytes(
+        2, "big"
+    ) + int(value).to_bytes(2, "big")
+    crc = 0xFFFF
+    for byte in frame:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return frame + crc.to_bytes(2, "little")
+
+
+@dataclass(frozen=True)
 class MarvinRobotState:
     frame_serial: tuple[int, int]
     q_rad: np.ndarray
@@ -119,6 +172,7 @@ class MarvinSdkAdapter:
         sdk_root_path=None,
         marvin_robot=None,
         dcss_structure=None,
+        gripper_configurations=None,
     ):
         if marvin_robot is None or dcss_structure is None:
             if sdk_root_path is None:
@@ -131,6 +185,20 @@ class MarvinSdkAdapter:
         self._dcss_structure = dcss_structure
         self._is_connected = False
         self._is_released = False
+        if gripper_configurations is not None:
+            if (
+                len(gripper_configurations) != 2
+                or not all(
+                    isinstance(config, MarvinModbusGripperConfiguration)
+                    for config in gripper_configurations
+                )
+            ):
+                raise TypeError(
+                    "gripper_configurations must contain two "
+                    "MarvinModbusGripperConfiguration values"
+                )
+            gripper_configurations = tuple(gripper_configurations)
+        self.gripper_configurations = gripper_configurations
 
     def connect(self):
         if self._is_connected:
@@ -154,6 +222,12 @@ class MarvinSdkAdapter:
                 f"failed to connect to Marvin at {self.robot_ip_address}"
             )
         self._is_connected = True
+        if self.gripper_configurations is not None:
+            for arm_name in ("A", "B"):
+                if not self._marvin_robot.clear_ch_data(arm_name):
+                    raise RuntimeError(
+                        f"failed to clear arm {arm_name} gripper channel"
+                    )
 
     def sdk_version(self):
         version_getter = getattr(self._marvin_robot, "SDK_version", None)
@@ -290,6 +364,44 @@ class MarvinSdkAdapter:
             wait_response,
             "joint position command",
         )
+
+    def send_gripper_command(self, closedness):
+        if not self._is_connected:
+            raise RuntimeError("Marvin control SDK is not connected")
+        if self.gripper_configurations is None:
+            raise RuntimeError("Marvin gripper protocol is not configured")
+        closedness = np.asarray(closedness, dtype=float).reshape(-1)
+        if (
+            closedness.shape != (2,)
+            or not np.all(np.isfinite(closedness))
+            or np.any(closedness < 0.0)
+            or np.any(closedness > 1.0)
+        ):
+            raise ValueError(
+                "gripper closedness must contain two values within [0, 1]"
+            )
+        targets = []
+        for arm_name, value, config in zip(
+            ("A", "B"), closedness, self.gripper_configurations
+        ):
+            target = round(
+                config.open_position
+                + value * (config.closed_position - config.open_position)
+            )
+            frame = _modbus_write_single_register_frame(
+                config.slave_id, config.position_register, target
+            )
+            sent_length = self._marvin_robot.set_ch_data(
+                arm_name, frame, len(frame), config.channel
+            )
+            if sent_length != len(frame):
+                raise RuntimeError(
+                    f"arm {arm_name} gripper command sent "
+                    f"{sent_length} of {len(frame)} bytes"
+                )
+            targets.append(target)
+        # ponytail: validate the Modbus echo once the vendor's reply timing is known.
+        return tuple(targets)
 
     @staticmethod
     def _validate_joint_impedance(values, field_name, upper_bound):
@@ -491,3 +603,19 @@ def load_active_tool_configs(tools_configuration_path):
             )
         )
     return tuple(tool_configurations)
+
+
+def load_modbus_gripper_configurations(configuration_path):
+    with Path(configuration_path).expanduser().open(
+        encoding="utf-8"
+    ) as configuration_file:
+        configuration = json.load(configuration_file)
+    try:
+        return tuple(
+            MarvinModbusGripperConfiguration(**configuration[arm_name])
+            for arm_name in ("left", "right")
+        )
+    except (KeyError, TypeError) as error:
+        raise ValueError(
+            "gripper config must contain left/right Modbus settings"
+        ) from error

@@ -21,9 +21,11 @@ from xr_marvin_teleop.common.xr_target_mapper import (
     transform_controller_poses_to_marvin_frame,
 )
 from xr_marvin_teleop.hardware.interface.marvin import (
+    MarvinModbusGripperConfiguration,
     MarvinRobotState,
     MarvinSdkAdapter,
     MarvinToolConfiguration,
+    _modbus_write_single_register_frame,
 )
 from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
     MarvinVendorKinematics,
@@ -62,6 +64,8 @@ class FakeXrSdk:
             "left_controller_pose": make_openxr_pose(-0.1),
             "right_controller_pose": make_openxr_pose(0.1),
             "grip_values": (0.0, 0.0),
+            "trigger_values": (0.0, 0.0),
+            "thumbstick_y_values": (0.0, 0.0),
             "button_a": False,
             "button_b": False,
         }
@@ -79,6 +83,8 @@ class FakeMarvinRobot:
         self.joint_motion_limits = {}
         self.tools = {}
         self.wait_response_calls = 0
+        self.channel_frames = []
+        self.cleared_channels = []
         self.released = False
 
     def connect(self, _robot_ip_address):
@@ -136,6 +142,14 @@ class FakeMarvinRobot:
         self.wait_response_calls += 1
         return 1
 
+    def clear_ch_data(self, arm):
+        self.cleared_channels.append(arm)
+        return True
+
+    def set_ch_data(self, arm, data, size_int, channel):
+        self.channel_frames.append((arm, bytes(data), channel))
+        return size_int
+
     def release_robot(self):
         self.released = True
 
@@ -162,6 +176,7 @@ class FakeMarvinSdkAdapter:
         self.configured_parameters = None
         self.configured_named_parameters = None
         self.pd_period_milliseconds = None
+        self.gripper_commands = []
         self.released = False
         self.idle = False
 
@@ -193,6 +208,9 @@ class FakeMarvinSdkAdapter:
         self.events.append("send_joint_command")
         self.q_rad = np.asarray(q_rad).copy()
         self.sent_commands_rad.append(self.q_rad.copy())
+
+    def send_gripper_command(self, closedness):
+        self.gripper_commands.append(tuple(closedness))
 
     def configure_control_parameters(self, *parameters, **named_parameters):
         self.events.append("configure_control_parameters")
@@ -429,6 +447,81 @@ class TestMarvinHardware(unittest.TestCase):
         adapter.release()
         self.assertTrue(fake_marvin_robot.released)
 
+    def test_incremental_gripper_controls_and_modbus_frame(self):
+        self.assertEqual(
+            _modbus_write_single_register_frame(1, 0, 1),
+            bytes.fromhex("01 06 00 00 00 01 48 0A"),
+        )
+        fake_marvin_robot = FakeMarvinRobot()
+        gripper_configs = (
+            MarvinModbusGripperConfiguration(1, 10, 1000, 0, 0.5),
+            MarvinModbusGripperConfiguration(1, 10, 0, 1000, 0.5),
+        )
+        hardware_adapter = MarvinSdkAdapter(
+            marvin_robot=fake_marvin_robot,
+            dcss_structure=object(),
+            gripper_configurations=gripper_configs,
+        )
+        hardware_adapter.connect()
+        self.assertEqual(
+            hardware_adapter.send_gripper_command((0.25, 0.75)),
+            (750, 750),
+        )
+        self.assertEqual(fake_marvin_robot.cleared_channels, ["A", "B"])
+        self.assertEqual(
+            [frame[:6] for _, frame, _ in fake_marvin_robot.channel_frames],
+            [bytes.fromhex("01 06 00 0A 02 EE")] * 2,
+        )
+        hardware_adapter.release()
+
+        def snapshot(timestamp, trigger=0.0, stick_y=0.0):
+            return XrSnapshot(
+                timestamp,
+                make_openxr_pose(),
+                make_openxr_pose(),
+                (0.0, 0.0),
+                False,
+                False,
+                (trigger, 0.0),
+                (stick_y, 0.0),
+            )
+
+        adapter = FakeMarvinSdkAdapter()
+        controller = MarvinHardwareTeleopController(
+            xr_client=FakeXRClient(
+                [
+                    snapshot(1),
+                    snapshot(2),
+                    snapshot(3, trigger=1.0),
+                    snapshot(4),
+                    snapshot(5, stick_y=-1.0),
+                    snapshot(6, stick_y=1.0),
+                    snapshot(7, trigger=1.0, stick_y=1.0),
+                ]
+            ),
+            adapter=adapter,
+            kinematics=FakeMarvinVendorKinematics(),
+            scale_calibration_path=Path("unused.json"),
+            requested_scale_factor=1.0,
+            expected_sdk_version=1,
+            control_parameter_settle_seconds=0.0,
+            mode_settle_seconds=0.0,
+            pd_settle_seconds=0.0,
+            gripper_control_enabled=True,
+            initial_gripper_closedness=(0.5, 0.5),
+            gripper_rate=1.0,
+            gripper_command_hz=20.0,
+        )
+        controller.prepare_hardware()
+        for cycle_time in (0.0, 0.1, 0.2, 0.3, 0.4, 0.5):
+            controller.execute_control_cycle(cycle_time)
+        self.assertAlmostEqual(controller.gripper_closedness[0], 0.58)
+        self.assertAlmostEqual(controller.gripper_closedness[1], 0.5)
+        self.assertEqual(
+            adapter.gripper_commands[-1], controller.gripper_closedness
+        )
+        controller.shutdown_hardware()
+
     def test_control_sdk_retries_feedback_during_connection_warmup(self):
         fake_marvin_robot = FakeMarvinRobot()
         fake_marvin_robot.invalid_feedback_reads = 2
@@ -474,6 +567,15 @@ class TestMarvinHardware(unittest.TestCase):
             invalid_reference_result.failure_reason,
             "reference joints must not all be zero",
         )
+        unsafe_j4_q_rad = MARVIN_INITIAL_POSE_Q_RAD[:7].copy()
+        unsafe_j4_q_rad[3] = np.deg2rad(-4.0)
+        unsafe_j4_result = kinematics.ik_world(
+            0,
+            kinematics.fk_world(0, unsafe_j4_q_rad),
+            unsafe_j4_q_rad,
+        )
+        self.assertFalse(unsafe_j4_result.success)
+        self.assertIn("joint 4 exceeds -5 degree", unsafe_j4_result.failure_reason)
 
         released_snapshot = XrSnapshot(
             1,
