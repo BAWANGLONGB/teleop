@@ -59,7 +59,6 @@ class FakeXrSdk:
             timestamp_ns = self.timestamps[0]
         return {
             "timestamp_ns": timestamp_ns,
-            "headset_pose": make_openxr_pose(),
             "left_controller_pose": make_openxr_pose(-0.1),
             "right_controller_pose": make_openxr_pose(0.1),
             "grip_values": (0.0, 0.0),
@@ -295,7 +294,6 @@ class TestMarvinHardware(unittest.TestCase):
             1,
             make_openxr_pose(),
             make_openxr_pose(),
-            make_openxr_pose(),
             (1.0, 0.0),
             False,
             False,
@@ -314,7 +312,6 @@ class TestMarvinHardware(unittest.TestCase):
 
         moved_snapshot = XrSnapshot(
             2,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=0.1),
             make_openxr_pose(),
             (1.0, 0.0),
@@ -331,24 +328,6 @@ class TestMarvinHardware(unittest.TestCase):
             target_tcp_transform[:3, 3], [0.0, 0.05, 0.0], atol=1e-12
         )
 
-        changed_headset_snapshot = XrSnapshot(
-            3,
-            np.array([2.0, 3.0, 4.0, 0.0, np.sqrt(0.5), 0.0, np.sqrt(0.5)]),
-            moved_snapshot.left_controller_pose,
-            moved_snapshot.right_controller_pose,
-            (1.0, 0.0),
-            False,
-            False,
-        )
-        changed_headset_poses = transform_controller_poses_to_marvin_frame(
-            changed_headset_snapshot
-        )
-        for actual_pose, expected_pose in zip(
-            changed_headset_poses, controller_poses
-        ):
-            np.testing.assert_allclose(actual_pose[0], expected_pose[0])
-            np.testing.assert_allclose(actual_pose[1], expected_pose[1])
-
         pose_mapper.map_arm(
             0, controller_poses[0], current_tcp_transform, False
         )
@@ -356,7 +335,6 @@ class TestMarvinHardware(unittest.TestCase):
         new_tcp_transform[:3, 3] = [1.0, 2.0, 3.0]
         regrip_snapshot = XrSnapshot(
             4,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=0.4),
             make_openxr_pose(),
             (1.0, 0.0),
@@ -374,7 +352,6 @@ class TestMarvinHardware(unittest.TestCase):
         )
         after_regrip_snapshot = XrSnapshot(
             5,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=0.5),
             make_openxr_pose(z_meters=-0.2),
             (1.0, 1.0),
@@ -500,7 +477,6 @@ class TestMarvinHardware(unittest.TestCase):
 
         released_snapshot = XrSnapshot(
             1,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=-0.2),
             make_openxr_pose(x_meters=0.2),
             (0.0, 0.0),
@@ -509,7 +485,6 @@ class TestMarvinHardware(unittest.TestCase):
         )
         active_anchor_snapshot = XrSnapshot(
             2,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=-0.2),
             make_openxr_pose(x_meters=0.2),
             (1.0, 1.0),
@@ -518,7 +493,6 @@ class TestMarvinHardware(unittest.TestCase):
         )
         active_moved_snapshot = XrSnapshot(
             3,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=-0.16),
             make_openxr_pose(x_meters=0.24),
             (1.0, 1.0),
@@ -665,7 +639,6 @@ class TestMarvinHardware(unittest.TestCase):
             [
                 XrSnapshot(
                     1,
-                    make_openxr_pose(),
                     make_openxr_pose(x_meters=-0.2),
                     make_openxr_pose(x_meters=0.2),
                     (0.0, 0.0),
@@ -674,7 +647,6 @@ class TestMarvinHardware(unittest.TestCase):
                 ),
                 XrSnapshot(
                     2,
-                    make_openxr_pose(),
                     make_openxr_pose(x_meters=-0.2),
                     make_openxr_pose(x_meters=0.2),
                     (1.0, 1.0),
@@ -683,7 +655,6 @@ class TestMarvinHardware(unittest.TestCase):
                 ),
                 XrSnapshot(
                     3,
-                    make_openxr_pose(),
                     make_openxr_pose(x_meters=-0.16),
                     make_openxr_pose(x_meters=0.24),
                     (1.0, 1.0),
@@ -719,14 +690,12 @@ class TestMarvinHardware(unittest.TestCase):
             1,
             make_openxr_pose(),
             make_openxr_pose(),
-            make_openxr_pose(),
             (0.0, 0.0),
             False,
             False,
         )
         calibration_down_snapshot = XrSnapshot(
             2,
-            make_openxr_pose(),
             make_openxr_pose(),
             make_openxr_pose(),
             (0.0, 0.0),
@@ -737,14 +706,12 @@ class TestMarvinHardware(unittest.TestCase):
             3,
             make_openxr_pose(),
             make_openxr_pose(),
-            make_openxr_pose(),
             (1.0, 0.0),
             False,
             False,
         )
         active_moved_snapshot = XrSnapshot(
             4,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=0.1),
             make_openxr_pose(),
             (1.0, 0.0),
@@ -753,7 +720,6 @@ class TestMarvinHardware(unittest.TestCase):
         )
         active_unreachable_snapshot = XrSnapshot(
             5,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=0.2),
             make_openxr_pose(),
             (1.0, 0.0),
@@ -762,7 +728,6 @@ class TestMarvinHardware(unittest.TestCase):
         )
         regrip_anchor_snapshot = XrSnapshot(
             6,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=0.4),
             make_openxr_pose(),
             (1.0, 0.0),
@@ -771,7 +736,6 @@ class TestMarvinHardware(unittest.TestCase):
         )
         regrip_moved_snapshot = XrSnapshot(
             7,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=0.5),
             make_openxr_pose(),
             (1.0, 0.0),
@@ -782,14 +746,12 @@ class TestMarvinHardware(unittest.TestCase):
             8,
             make_openxr_pose(),
             make_openxr_pose(),
-            make_openxr_pose(),
             (0.0, 0.0),
             False,
             True,
         )
         calibration_forward_snapshot = XrSnapshot(
             9,
-            make_openxr_pose(),
             make_openxr_pose(
                 y_meters=0.664989,
                 z_meters=-0.558866,
@@ -896,7 +858,6 @@ class TestMarvinHardware(unittest.TestCase):
             1,
             make_openxr_pose(),
             make_openxr_pose(),
-            make_openxr_pose(),
             (0.0, 0.0),
             False,
             False,
@@ -905,14 +866,12 @@ class TestMarvinHardware(unittest.TestCase):
             2,
             make_openxr_pose(),
             make_openxr_pose(),
-            make_openxr_pose(),
             (1.0, 0.0),
             False,
             False,
         )
         active_moved_snapshot = XrSnapshot(
             3,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=0.1),
             make_openxr_pose(),
             (1.0, 0.0),
@@ -921,7 +880,6 @@ class TestMarvinHardware(unittest.TestCase):
         )
         recovered_anchor_snapshot = XrSnapshot(
             4,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=0.5),
             make_openxr_pose(),
             (1.0, 0.0),
@@ -930,7 +888,6 @@ class TestMarvinHardware(unittest.TestCase):
         )
         recovered_moved_snapshot = XrSnapshot(
             5,
-            make_openxr_pose(),
             make_openxr_pose(x_meters=0.6),
             make_openxr_pose(),
             (1.0, 0.0),
@@ -991,7 +948,6 @@ class TestMarvinHardware(unittest.TestCase):
     def test_teleoperation_rejects_stale_robot_feedback(self):
         snapshot = XrSnapshot(
             1,
-            make_openxr_pose(),
             make_openxr_pose(),
             make_openxr_pose(),
             (0.0, 0.0),

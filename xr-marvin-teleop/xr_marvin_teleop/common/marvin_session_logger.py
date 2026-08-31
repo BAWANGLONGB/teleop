@@ -84,7 +84,6 @@ class MarvinSessionLogger:
             "xr_timestamp_ns": (
                 None if xr_snapshot is None else xr_snapshot.timestamp_ns
             ),
-            "headset_pose": None if xr_snapshot is None else xr_snapshot.headset_pose,
             "left_controller_pose": (
                 None if xr_snapshot is None else xr_snapshot.left_controller_pose
             ),

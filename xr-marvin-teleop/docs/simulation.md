@@ -39,7 +39,7 @@ python -m unittest discover -s tests -v
 ```
 
 按[测试流程](testing.md#6-pico-only-测试)确认 PICO 数据持续递增。PICO 端必须
-打开 `Head`、`Controller` 和 `Send`，并关闭 `Switch w/ A Button`。
+打开 `Controller` 和 `Send`，关闭 `Switch w/ A Button`；摘下头显使用时关闭自动休眠。
 
 ## 4. 实时遥操
 
@@ -152,7 +152,7 @@ python scripts/simulation/replay_marvin_log.py \
 
 | 现象 | 检查项 |
 | --- | --- |
-| 只显示 `server connect` | PICO 是否为 `WORKING`，Head/Controller/Send 是否开启 |
+| 只显示 `server connect` | PICO 是否为 `WORKING`，Controller/Send 是否开启 |
 | `PICO produced no advancing...` | XR 时间戳为 0 或停止递增，保持头显唤醒 |
 | MJCF 加载失败 | `assets/marvin/meshes/` 是否完整 |
 | IK 保持上一目标 | 检查目标是否超工作空间、奇异或关节越界 |

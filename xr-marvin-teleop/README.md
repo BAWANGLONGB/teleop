@@ -32,7 +32,7 @@ python -m pip install -e . --no-build-isolation
 
 ## PICO → MuJoCo
 
-PICO 已连接且 `Head/Controller/Send` 打开后运行：
+PICO 已连接且 `Controller/Send` 打开后运行；头显摘下使用时需关闭自动休眠：
 
 ```bash
 python scripts/simulation/teleop_marvin_mujoco.py --scale-factor 0.5

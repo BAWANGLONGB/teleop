@@ -18,7 +18,6 @@ def _validate_openxr_pose(value, field_name):
 @dataclass(frozen=True)
 class XrSnapshot:
     timestamp_ns: int
-    headset_pose: np.ndarray
     left_controller_pose: np.ndarray
     right_controller_pose: np.ndarray
     grip_values: tuple[float, float]
@@ -31,7 +30,6 @@ class XrSnapshot:
             raise ValueError("timestamp_ns must be positive")
         object.__setattr__(self, "timestamp_ns", timestamp_ns)
         for field_name in (
-            "headset_pose",
             "left_controller_pose",
             "right_controller_pose",
         ):
@@ -122,7 +120,7 @@ class XrClient:
                 last_error = error
             time.sleep(0.01)
         raise TimeoutError(
-            "PICO produced no advancing Head/Controller snapshot within "
+            "PICO produced no advancing Controller snapshot within "
             f"{timeout_seconds:g} seconds"
         ) from last_error
 

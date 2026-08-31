@@ -150,7 +150,7 @@ marvin_mujoco_<timestamp>.jsonl
 
 ```text
 monotonic_time_ns, xr_timestamp_ns
-headset_pose, left_controller_pose, right_controller_pose
+left_controller_pose, right_controller_pose
 grip_values, button_a, button_b, scale_factor
 frame_serial, arm_state, error_code
 q_feedback_rad, dq_feedback_rad_s, q_command_rad

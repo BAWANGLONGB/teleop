@@ -1,7 +1,10 @@
 """Named Marvin joint postures in SDK arm A/B order."""
 
 import numpy as np
-
+"""
+    J2>=-90,
+    J4 <= 0,
+"""
 
 MARVIN_INITIAL_POSE_Q_DEG = np.array(
     [

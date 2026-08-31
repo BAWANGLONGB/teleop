@@ -48,9 +48,9 @@ ss -lnt | grep -E ':(63901|60061)\b'
 PICO 端确认：
 
 1. Network 为 `WORKING`；
-2. `Head`、`Controller`、`Send` 已打开；
+2. `Controller`、`Send` 已打开；
 3. `Switch w/ A Button` 关闭；
-4. 头显保持唤醒，左右手柄均已连接。
+4. 头显保持唤醒，左右手柄均已连接；摘下使用时关闭自动休眠。
 
 只读取 XR，不创建 Marvin 控制对象：
 

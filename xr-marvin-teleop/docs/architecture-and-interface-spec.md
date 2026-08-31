@@ -55,16 +55,15 @@ native/_xrobotoolkit_sdk ──原子快照──> XrClient
 
 ```text
 timestamp_ns: int                         # 正整数，XR 源时间戳
-headset_pose: ndarray(7)                  # [x,y,z,qx,qy,qz,qw]
-left_controller_pose: ndarray(7)          # 同上
+left_controller_pose: ndarray(7)          # [x,y,z,qx,qy,qz,qw]
 right_controller_pose: ndarray(7)         # 同上
 grip_values: tuple[float, float]           # [0,1]，左/右
 button_a: bool
 button_b: bool
 ```
 
-三个位姿必须有限，四元数范数允许 `1e-3` 误差，进入对象时会归一化。手柄位姿
-使用固定 OpenXR tracking space，当前控制映射不使用头显位姿。
+两个手柄位姿必须有限，四元数范数允许 `1e-3` 误差，进入对象时会归一化。
+手柄位姿使用固定 OpenXR tracking space；接收和控制链路不依赖头显位姿。
 
 ### 3.2 `MarvinRobotState`
 
@@ -110,7 +109,7 @@ close() -> None
 
 `get_snapshot()` 返回一次完整回调的副本，字典字段必须能直接构造
 `XrSnapshot`。尚未收到有效帧时返回 `None`。回调解析失败时丢弃整帧，不允许
-把不同回调中的 Head、Controller 或按钮字段拼成一帧。
+把不同回调中的 Controller 或按钮字段拼成一帧。
 
 ### 4.2 XR 客户端
 
@@ -321,7 +320,7 @@ scale 来源优先级为：命令行显式值 > 有效标定文件 > 默认 `1.2
 
 ```text
 monotonic_time_ns, xr_frame_valid, xr_timestamp_ns,
-headset_pose, left_controller_pose, right_controller_pose,
+left_controller_pose, right_controller_pose,
 grip_values, button_a, button_b, scale_factor,
 frame_serial, arm_state, error_code,
 q_feedback_rad, dq_feedback_rad_s, q_command_rad

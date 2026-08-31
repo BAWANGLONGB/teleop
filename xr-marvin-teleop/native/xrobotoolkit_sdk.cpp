@@ -28,7 +28,6 @@ using JsonObject = std::unique_ptr<json_object, decltype(&json_object_put)>;
 struct XrSnapshot
 {
     int64_t timestamp_ns;
-    Pose headset_pose;
     Pose left_controller_pose;
     Pose right_controller_pose;
     std::array<double, 2> grip_values;
@@ -103,12 +102,10 @@ XrSnapshot parse_snapshot(const PXREADevStateJson& device_state)
     json_object* controllers = require_member(value.get(), "Controller");
     json_object* left_controller = require_member(controllers, "left");
     json_object* right_controller = require_member(controllers, "right");
-    json_object* headset = require_member(value.get(), "Head");
 
     XrSnapshot snapshot{};
     snapshot.timestamp_ns =
         json_object_get_int64(require_member(value.get(), "timeStampNs"));
-    snapshot.headset_pose = parse_pose(headset);
     snapshot.left_controller_pose = parse_pose(left_controller);
     snapshot.right_controller_pose = parse_pose(right_controller);
     snapshot.grip_values = {
@@ -195,7 +192,6 @@ py::object get_snapshot()
 
     py::dict result;
     result["timestamp_ns"] = snapshot->timestamp_ns;
-    result["headset_pose"] = snapshot->headset_pose;
     result["left_controller_pose"] = snapshot->left_controller_pose;
     result["right_controller_pose"] = snapshot->right_controller_pose;
     result["grip_values"] = snapshot->grip_values;
