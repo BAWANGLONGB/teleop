@@ -43,6 +43,22 @@ python scripts/simulation/teleop_marvin_mujoco.py --scale-factor 0.5
 输入回中后保持；冲突时闭合优先。默认全行程约 `2 s`，夹爪目标最多按 `20 Hz`
 更新。当前 MuJoCo 夹爪仍是固定视觉模型，仿真会验证和记录归一化夹爪目标。
 
+如需让冗余构型偏向 J3，可选启用 IK_NSP。Grip 按下时，以按下瞬间的手柄横向位置
+为零点，横向移动会映射为 `ZSP_Angle`；默认最大偏角为 `5°`，并按斜率渐变，避免
+首次切换跳变：
+
+```bash
+python scripts/simulation/teleop_marvin_mujoco.py --headless \
+  --nsp-lateral --nsp-max-angle 5 --nsp-angle-rate 20
+```
+
+默认死区为 `0.03 m`、满量程为 `0.12 m`，可用
+`--nsp-lateral-deadzone` 和 `--nsp-lateral-range` 调整。左右硬件的角度方向不一致
+时，可用 `--nsp-lateral-sign-left/right {-1,1}` 校准。NSP 失败、超限或单步变化过大
+时回退普通 IK；不提供 `--nsp-lateral` 或旧的 `--nsp-angle-left/right` 时保持普通 IK
+路径。默认左右 sign 都为 `+1`：Marvin `+Y`（手柄向右）使右臂沉肘、左臂抬肘，
+反向移动则相反；旧参数仍保留用于固定角度兼容场景。
+
 ## 日志回放
 
 实机与仿真默认把控制周期写入 `logs/*.jsonl`：

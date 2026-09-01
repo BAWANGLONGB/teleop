@@ -178,8 +178,16 @@ ik_world(
     arm: int,
     T_world_tcp_m: ndarray(4, 4),
     q_ref_rad: sequence[7],
+    nsp_angle_deg: float | None = None,
 ) -> VendorIkResult
+
+set_nsp_reference(arm: int, q_rad: sequence[7]) -> None
 ```
+
+`nsp_angle_deg=None` 使用普通 IK；启用 NSP 时必须先为每臂缓存
+`fk_nsp(q_rad)` 的参考臂角平面。控制周期先调用普通 IK，再调用 `ik_nsp`；NSP
+失败或结果单步变化超过安全阈值时返回普通 IK 结果。`nsp_angle_deg` 为相对参考
+平面的绝对角度，单位为度，范围为 `[-30, 30]`。
 
 `arm=0/1` 对应 SDK A/B。正常的不可达、奇异、超限或无解不抛异常，而返回：
 
@@ -259,6 +267,16 @@ close() -> None
 较大值增量闭合，摇杆前推增量打开，输入回中后保持；Trigger 与前推冲突时闭合
 优先。计算跟随主控制周期，实机 Modbus 位置目标最多按 `20 Hz` 下发。XR stale
 和程序退出都保持最后目标，不自动开爪。
+
+可选 IK_NSP 在每臂启动反馈姿态上缓存参考臂角平面，按配置的角度斜率渐变目标
+臂角。启用 `--nsp-lateral` 时，Grip 按下瞬间记录该臂手柄的 Marvin `+Y` 横向
+位置作为零点，死区外的位移线性映射到 `ZSP_Angle`，默认最大偏角为 `5°`；松开
+Grip 后目标回到零并清除零点。普通 IK 建立目标和内部 NSP 状态后才调用 IK_NSP；
+失败、越限或单步关节变化过大时回退普通 IK。NSP 只偏置冗余臂角，不保证只移动
+J3，J4 安全限位仍由运动学边界统一执行。默认左右横向符号均为 `+1`，因此 Marvin
+`+Y`（手柄向右）使右臂沉肘、左臂抬肘；现场若符号相反再设置对应的 `-1` 校准项。
+旧的固定
+`--nsp-angle-left/right` 参数保留作兼容，但不能与横向模式同时指定非零角度。
 
 ### 5.3 B 键机器人 reset
 

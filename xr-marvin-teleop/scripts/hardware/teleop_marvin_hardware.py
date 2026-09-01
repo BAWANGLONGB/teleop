@@ -21,6 +21,10 @@ from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     DEFAULT_JOINT_VELOCITY_RATIO,
     DEFAULT_GRIPPER_COMMAND_HZ,
     DEFAULT_GRIPPER_RATE,
+    DEFAULT_NSP_ANGLE_RATE_DEG_S,
+    DEFAULT_NSP_LATERAL_DEADZONE_M,
+    DEFAULT_NSP_LATERAL_FULL_SCALE_M,
+    DEFAULT_NSP_LATERAL_MAX_ANGLE_DEG,
     MarvinHardwareTeleopController,
 )
 
@@ -61,6 +65,43 @@ def parse_command_line_arguments():
     )
     parser.add_argument(
         "--thumbstick-y-sign", type=int, choices=(-1, 1), default=1
+    )
+    parser.add_argument("--nsp-angle-left", type=float, default=0.0)
+    parser.add_argument("--nsp-angle-right", type=float, default=0.0)
+    parser.add_argument(
+        "--nsp-angle-rate",
+        type=float,
+        default=DEFAULT_NSP_ANGLE_RATE_DEG_S,
+        help="IK_NSP angle slew rate in degrees per second",
+    )
+    parser.add_argument(
+        "--nsp-lateral",
+        action="store_true",
+        help="map Grip-held controller lateral motion to IK_NSP angle",
+    )
+    parser.add_argument(
+        "--nsp-max-angle",
+        type=float,
+        default=DEFAULT_NSP_LATERAL_MAX_ANGLE_DEG,
+        help="maximum lateral IK_NSP angle in degrees (default: 5)",
+    )
+    parser.add_argument(
+        "--nsp-lateral-deadzone",
+        type=float,
+        default=DEFAULT_NSP_LATERAL_DEADZONE_M,
+        help="lateral controller deadzone in metres (default: 0.03)",
+    )
+    parser.add_argument(
+        "--nsp-lateral-range",
+        type=float,
+        default=DEFAULT_NSP_LATERAL_FULL_SCALE_M,
+        help="lateral displacement for full NSP angle in metres (default: 0.12)",
+    )
+    parser.add_argument(
+        "--nsp-lateral-sign-left", type=int, choices=(-1, 1), default=1
+    )
+    parser.add_argument(
+        "--nsp-lateral-sign-right", type=int, choices=(-1, 1), default=1
     )
     parser.add_argument("--scale-factor", type=float)
     parser.add_argument(
@@ -188,6 +229,26 @@ def main():
             gripper_rate=arguments.gripper_rate,
             gripper_command_hz=arguments.gripper_command_hz,
             thumbstick_y_sign=arguments.thumbstick_y_sign,
+            nsp_enabled=any(
+                abs(value) > 1e-9
+                for value in (
+                    arguments.nsp_angle_left,
+                    arguments.nsp_angle_right,
+                )
+            ) or arguments.nsp_lateral,
+            nsp_angles_deg=(
+                arguments.nsp_angle_left,
+                arguments.nsp_angle_right,
+            ),
+            nsp_angle_rate_deg_s=arguments.nsp_angle_rate,
+            nsp_lateral_enabled=arguments.nsp_lateral,
+            nsp_lateral_max_angle_deg=arguments.nsp_max_angle,
+            nsp_lateral_deadzone_m=arguments.nsp_lateral_deadzone,
+            nsp_lateral_full_scale_m=arguments.nsp_lateral_range,
+            nsp_lateral_signs=(
+                arguments.nsp_lateral_sign_left,
+                arguments.nsp_lateral_sign_right,
+            ),
         )
         print(
             f"Confirmed robot model: "

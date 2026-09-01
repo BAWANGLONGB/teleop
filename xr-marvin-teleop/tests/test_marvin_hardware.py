@@ -237,6 +237,11 @@ class FakeMarvinSdkAdapter:
 class FakeMarvinVendorKinematics:
     def __init__(self):
         self.fail_inverse_kinematics = False
+        self.nsp_reference_calls = []
+        self.nsp_angles_deg = []
+
+    def set_nsp_reference(self, arm, q_rad):
+        self.nsp_reference_calls.append((arm, np.asarray(q_rad).copy()))
 
     def fk_world(self, _arm, q_rad):
         tcp_transform = np.eye(4)
@@ -248,7 +253,9 @@ class FakeMarvinVendorKinematics:
         _arm,
         T_world_tcp_m,
         q_ref_rad,
+        nsp_angle_deg=None,
     ):
+        self.nsp_angles_deg.append(nsp_angle_deg)
         if self.fail_inverse_kinematics:
             return VendorIkResult(False, None, "singular or out of range")
         q_rad = np.asarray(q_ref_rad).copy()
@@ -522,6 +529,89 @@ class TestMarvinHardware(unittest.TestCase):
         )
         controller.shutdown_hardware()
 
+    def test_optional_ik_nsp_is_initialized_and_angle_is_ramped(self):
+        def snapshot(timestamp, grip_values):
+            return XrSnapshot(
+                timestamp,
+                make_openxr_pose(),
+                make_openxr_pose(),
+                grip_values,
+                False,
+                False,
+            )
+
+        kinematics = FakeMarvinVendorKinematics()
+        adapter = FakeMarvinSdkAdapter()
+        controller = MarvinHardwareTeleopController(
+            xr_client=FakeXRClient(
+                [
+                    snapshot(1, (0.0, 0.0)),
+                    snapshot(2, (1.0, 1.0)),
+                    snapshot(3, (1.0, 1.0)),
+                    snapshot(4, (1.0, 1.0)),
+                ]
+            ),
+            adapter=adapter,
+            kinematics=kinematics,
+            scale_calibration_path=Path("unused.json"),
+            expected_sdk_version=1,
+            control_parameter_settle_seconds=0.0,
+            mode_settle_seconds=0.0,
+            pd_settle_seconds=0.0,
+            nsp_enabled=True,
+            nsp_angles_deg=(5.0, -5.0),
+            nsp_angle_rate_deg_s=20.0,
+        )
+        controller.prepare_hardware()
+        self.assertEqual([arm for arm, _ in kinematics.nsp_reference_calls], [0, 1])
+        controller.execute_control_cycle(0.0)
+        controller.execute_control_cycle(0.1)
+        controller.execute_control_cycle(0.2)
+        self.assertEqual(kinematics.nsp_angles_deg[0], 0.0)
+        self.assertAlmostEqual(kinematics.nsp_angles_deg[2], 0.8)
+        self.assertAlmostEqual(kinematics.nsp_angles_deg[4], 1.6)
+        controller.shutdown_hardware()
+
+    def test_lateral_nsp_maps_grip_held_controller_motion_to_angle(self):
+        def snapshot(timestamp, left_x, right_x, grip_values):
+            return XrSnapshot(
+                timestamp,
+                make_openxr_pose(x_meters=left_x),
+                make_openxr_pose(x_meters=right_x),
+                grip_values,
+                False,
+                False,
+                (0.0, 0.0),
+                (0.0, 0.0),
+            )
+
+        kinematics = FakeMarvinVendorKinematics()
+        controller = MarvinHardwareTeleopController(
+            xr_client=FakeXRClient(
+                [
+                    snapshot(1, 0.0, 0.0, (0.0, 0.0)),
+                    snapshot(2, 0.0, 0.0, (1.0, 1.0)),
+                    snapshot(3, -0.12, 0.12, (1.0, 1.0)),
+                ]
+            ),
+            adapter=FakeMarvinSdkAdapter(),
+            kinematics=kinematics,
+            scale_calibration_path=Path("unused.json"),
+            expected_sdk_version=1,
+            control_parameter_settle_seconds=0.0,
+            mode_settle_seconds=0.0,
+            pd_settle_seconds=0.0,
+            nsp_lateral_enabled=True,
+            nsp_angle_rate_deg_s=20.0,
+        )
+        controller.prepare_hardware()
+        controller.execute_control_cycle(0.0)
+        controller.execute_control_cycle(0.02)
+        controller.execute_control_cycle(0.04)
+        self.assertAlmostEqual(kinematics.nsp_angles_deg[-2], -0.4)
+        self.assertAlmostEqual(kinematics.nsp_angles_deg[-1], 0.4)
+        controller.shutdown_hardware()
+
     def test_control_sdk_retries_feedback_during_connection_warmup(self):
         fake_marvin_robot = FakeMarvinRobot()
         fake_marvin_robot.invalid_feedback_reads = 2
@@ -576,6 +666,18 @@ class TestMarvinHardware(unittest.TestCase):
         )
         self.assertFalse(unsafe_j4_result.success)
         self.assertIn("joint 4 exceeds -5 degree", unsafe_j4_result.failure_reason)
+        safe_reference_q_rad = MARVIN_INITIAL_POSE_Q_RAD[:7].copy()
+        kinematics.set_nsp_reference(0, safe_reference_q_rad)
+        nsp_result = kinematics.ik_world(
+            0,
+            kinematics.fk_world(0, safe_reference_q_rad),
+            safe_reference_q_rad,
+            nsp_angle_deg=3.0,
+        )
+        self.assertTrue(nsp_result.success)
+        self.assertAlmostEqual(
+            nsp_result.q_rad[3], safe_reference_q_rad[3], places=8
+        )
 
         released_snapshot = XrSnapshot(
             1,

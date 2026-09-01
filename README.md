@@ -57,8 +57,14 @@ python scripts/hardware/teleop_marvin_hardware.py \
   --enable-hardware \
   --confirmed-estop \
   --confirmed-joint-mapping \
-  --confirmed-robot-model "M6S-Lite-CCS-680-B"
+  --confirmed-robot-model "M6S-Lite-CCS-680-B" \
+  --nsp-lateral \
+  --nsp-max-angle 10
 ```
+
+`--nsp-lateral` 在 Grip 按下期间将手柄横向位移映射为 IK_NSP 的 `ZSP_Angle`；
+最大偏角默认就是 `5°`。死区、满量程和角度变化速率可分别用
+`--nsp-lateral-deadzone`、`--nsp-lateral-range` 和 `--nsp-angle-rate` 调整。
 
 默认首次调试参数为 `velRatio=10`、`AccRatio=10`、`D=0.3`。完整启动、测试、
 标定、日志和仿真说明见 [`xr-marvin-teleop/README.md`](xr-marvin-teleop/README.md)。

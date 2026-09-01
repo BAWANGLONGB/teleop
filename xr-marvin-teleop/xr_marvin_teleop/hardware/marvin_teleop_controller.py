@@ -16,14 +16,19 @@ from xr_marvin_teleop.common.xr_target_mapper import (
 )
 
 
-DEFAULT_JOINT_K = (5.0, 5.0, 5.0, 4.0, 4.0, 3.0, 3.0)
-DEFAULT_JOINT_D = (0.4, 0.4, 0.4, 0.4, 0.3, 0.3, 0.3)
+DEFAULT_JOINT_K = (5.0, 5.0, 5.0, 4.0, 1.0, 1.0, 1.0)
+DEFAULT_JOINT_D = (0.4, 0.4, 0.4, 0.4, 0.2, 0.2, 0.2)
 DEFAULT_CONTROL_HZ = 50
 DEFAULT_JOINT_VELOCITY_RATIO = 10
 DEFAULT_JOINT_ACCELERATION_RATIO = 10
 MAX_CONSECUTIVE_STALE_FEEDBACK_CYCLES = 3
 DEFAULT_GRIPPER_RATE = 0.5
 DEFAULT_GRIPPER_COMMAND_HZ = 20.0
+DEFAULT_NSP_ANGLE_RATE_DEG_S = 15.0
+DEFAULT_NSP_LATERAL_MAX_ANGLE_DEG = 5.0
+DEFAULT_NSP_LATERAL_DEADZONE_M = 0.03
+DEFAULT_NSP_LATERAL_FULL_SCALE_M = 0.12
+MAX_NSP_ANGLE_DEG = 30.0
 
 
 class MarvinHardwareTeleopController:
@@ -57,6 +62,14 @@ class MarvinHardwareTeleopController:
         trigger_deadzone=0.08,
         thumbstick_deadzone=0.20,
         thumbstick_y_sign=1.0,
+        nsp_enabled=False,
+        nsp_angles_deg=(0.0, 0.0),
+        nsp_angle_rate_deg_s=DEFAULT_NSP_ANGLE_RATE_DEG_S,
+        nsp_lateral_enabled=False,
+        nsp_lateral_max_angle_deg=DEFAULT_NSP_LATERAL_MAX_ANGLE_DEG,
+        nsp_lateral_deadzone_m=DEFAULT_NSP_LATERAL_DEADZONE_M,
+        nsp_lateral_full_scale_m=DEFAULT_NSP_LATERAL_FULL_SCALE_M,
+        nsp_lateral_signs=(1.0, 1.0),
     ):
         control_hz = float(control_hz)
         if not 50.0 <= control_hz <= 200.0:
@@ -91,6 +104,54 @@ class MarvinHardwareTeleopController:
                 raise ValueError(f"{field_name} must be within [0, 1)")
         if thumbstick_y_sign not in (-1, 1):
             raise ValueError("thumbstick_y_sign must be -1 or 1")
+        nsp_angles_deg = np.asarray(nsp_angles_deg, dtype=float).reshape(-1)
+        if (
+            nsp_angles_deg.shape != (2,)
+            or not np.all(np.isfinite(nsp_angles_deg))
+            or np.any(np.abs(nsp_angles_deg) > MAX_NSP_ANGLE_DEG)
+        ):
+            raise ValueError(
+                f"nsp_angles_deg must contain two values within "
+                f"+/-{MAX_NSP_ANGLE_DEG:g} degrees"
+            )
+        nsp_lateral_max_angle_deg = float(nsp_lateral_max_angle_deg)
+        if (
+            not np.isfinite(nsp_lateral_max_angle_deg)
+            or not 0.0 < nsp_lateral_max_angle_deg <= MAX_NSP_ANGLE_DEG
+        ):
+            raise ValueError(
+                "nsp_lateral_max_angle_deg must be within (0, 30] degrees"
+            )
+        nsp_lateral_deadzone_m = float(nsp_lateral_deadzone_m)
+        nsp_lateral_full_scale_m = float(nsp_lateral_full_scale_m)
+        if (
+            not np.isfinite(nsp_lateral_deadzone_m)
+            or nsp_lateral_deadzone_m < 0.0
+            or not np.isfinite(nsp_lateral_full_scale_m)
+            or nsp_lateral_full_scale_m <= nsp_lateral_deadzone_m
+        ):
+            raise ValueError(
+                "nsp_lateral_full_scale_m must exceed a non-negative deadzone"
+            )
+        nsp_lateral_signs = np.asarray(
+            nsp_lateral_signs, dtype=float
+        ).reshape(-1)
+        if (
+            nsp_lateral_signs.shape != (2,)
+            or not np.all(np.isfinite(nsp_lateral_signs))
+            or not np.all(np.isin(nsp_lateral_signs, (-1.0, 1.0)))
+        ):
+            raise ValueError("nsp_lateral_signs must contain two values of +/-1")
+        if nsp_lateral_enabled and np.any(np.abs(nsp_angles_deg) > 1e-9):
+            raise ValueError(
+                "static nsp_angles_deg cannot be combined with lateral NSP"
+            )
+        nsp_angle_rate_deg_s = float(nsp_angle_rate_deg_s)
+        if not np.isfinite(nsp_angle_rate_deg_s) or nsp_angle_rate_deg_s <= 0.0:
+            raise ValueError("nsp_angle_rate_deg_s must be positive")
+        nsp_enabled = bool(nsp_enabled or nsp_lateral_enabled)
+        if nsp_enabled and not hasattr(kinematics, "set_nsp_reference"):
+            raise TypeError("kinematics must provide set_nsp_reference()")
         initial_gripper_closedness = np.asarray(
             initial_gripper_closedness, dtype=float
         ).reshape(-1)
@@ -154,6 +215,18 @@ class MarvinHardwareTeleopController:
         self.trigger_deadzone = float(trigger_deadzone)
         self.thumbstick_deadzone = float(thumbstick_deadzone)
         self.thumbstick_y_sign = int(thumbstick_y_sign)
+        self.nsp_enabled = bool(nsp_enabled)
+        self.nsp_angles_deg = nsp_angles_deg.copy()
+        self.nsp_angle_rate_deg_s = nsp_angle_rate_deg_s
+        self.nsp_lateral_enabled = bool(nsp_lateral_enabled)
+        self.nsp_lateral_max_angle_deg = nsp_lateral_max_angle_deg
+        self.nsp_lateral_deadzone_m = nsp_lateral_deadzone_m
+        self.nsp_lateral_full_scale_m = nsp_lateral_full_scale_m
+        self.nsp_lateral_signs = nsp_lateral_signs.copy()
+        self._nsp_current_angles_deg = np.zeros(2)
+        self._nsp_target_angles_deg = nsp_angles_deg.copy()
+        self._nsp_lateral_anchor_y = [None, None]
+        self._last_nsp_update_time = None
         self._gripper_closedness = initial_gripper_closedness.copy()
         self._last_sent_gripper_closedness = initial_gripper_closedness.copy()
         self._last_gripper_update_time = None
@@ -282,6 +355,11 @@ class MarvinHardwareTeleopController:
             time.sleep(self.control_parameter_settle_seconds)
 
         startup_q_rad = robot_feedback.q_rad.copy()
+        if self.nsp_enabled:
+            for arm_index in (0, 1):
+                self.kinematics.set_nsp_reference(
+                    arm_index, startup_q_rad[self._arm_joint_slice(arm_index)]
+                )
         self._last_commanded_q_rad = startup_q_rad.copy()
         self._last_ik_q_rad = [
             startup_q_rad[:7].copy(),
@@ -376,6 +454,8 @@ class MarvinHardwareTeleopController:
         reset_requested = self._process_controls(
             xr_snapshot, controller_poses_marvin, grip_states, robot_feedback
         )
+        self._update_nsp_lateral_targets(controller_poses_marvin, grip_states)
+        self._advance_nsp_angles(grip_states, cycle_time_seconds)
 
         q_command_rad = self._last_commanded_q_rad.copy()
         for arm_index, is_grip_active in enumerate(grip_states):
@@ -399,13 +479,19 @@ class MarvinHardwareTeleopController:
                     if not self._previous_grip_states[arm_index]
                     else self._last_ik_q_rad[arm_index]
                 )
-                inverse_kinematics_result = (
-                    self.kinematics.ik_world(
+                if self.nsp_enabled:
+                    inverse_kinematics_result = self.kinematics.ik_world(
                         arm_index,
                         target_tcp_transform,
                         q_ref_rad,
+                        nsp_angle_deg=float(
+                            self._nsp_current_angles_deg[arm_index]
+                        ),
                     )
-                )
+                else:
+                    inverse_kinematics_result = self.kinematics.ik_world(
+                        arm_index, target_tcp_transform, q_ref_rad
+                    )
                 if inverse_kinematics_result.success:
                     q_command_rad[arm_joint_slice] = (
                         inverse_kinematics_result.q_rad
@@ -510,6 +596,66 @@ class MarvinHardwareTeleopController:
         self._last_sent_gripper_closedness = self._gripper_closedness.copy()
         self._last_gripper_command_time = cycle_time_seconds
 
+    def _advance_nsp_angles(self, grip_states, cycle_time_seconds):
+        if not self.nsp_enabled:
+            return
+        previous_time = self._last_nsp_update_time
+        self._last_nsp_update_time = cycle_time_seconds
+        if previous_time is None:
+            elapsed_seconds = 0.0
+        else:
+            elapsed_seconds = cycle_time_seconds - previous_time
+            if elapsed_seconds < 0.0:
+                raise ValueError("control cycle time regressed")
+            elapsed_seconds = min(
+                elapsed_seconds, 2.0 * self.control_period_seconds
+            )
+        maximum_step = self.nsp_angle_rate_deg_s * elapsed_seconds
+        for arm_index, is_grip_active in enumerate(grip_states):
+            if not is_grip_active:
+                self._nsp_current_angles_deg[arm_index] = 0.0
+                continue
+            error = (
+                self._nsp_target_angles_deg[arm_index]
+                - self._nsp_current_angles_deg[arm_index]
+            )
+            self._nsp_current_angles_deg[arm_index] += np.clip(
+                error, -maximum_step, maximum_step
+            )
+
+    def _update_nsp_lateral_targets(self, controller_poses_marvin, grip_states):
+        if not self.nsp_lateral_enabled:
+            return
+        for arm_index, is_grip_active in enumerate(grip_states):
+            if not is_grip_active:
+                self._nsp_lateral_anchor_y[arm_index] = None
+                self._nsp_target_angles_deg[arm_index] = 0.0
+                continue
+            y_position = float(controller_poses_marvin[arm_index][0][1])
+            anchor_y = self._nsp_lateral_anchor_y[arm_index]
+            if anchor_y is None:
+                self._nsp_lateral_anchor_y[arm_index] = y_position
+                self._nsp_target_angles_deg[arm_index] = 0.0
+                continue
+            displacement = y_position - anchor_y
+            magnitude = abs(displacement)
+            if magnitude <= self.nsp_lateral_deadzone_m:
+                normalized_displacement = 0.0
+            else:
+                normalized_displacement = np.sign(displacement) * min(
+                    1.0,
+                    (magnitude - self.nsp_lateral_deadzone_m)
+                    / (
+                        self.nsp_lateral_full_scale_m
+                        - self.nsp_lateral_deadzone_m
+                    ),
+                )
+            self._nsp_target_angles_deg[arm_index] = (
+                self.nsp_lateral_signs[arm_index]
+                * self.nsp_lateral_max_angle_deg
+                * normalized_displacement
+            )
+
     def execute_control_cycle(self, cycle_time_seconds=None):
         if not self._hardware_prepared:
             raise RuntimeError("prepare_hardware() must run before control cycles")
@@ -527,6 +673,12 @@ class MarvinHardwareTeleopController:
             self._previous_grip_states = (False, False)
             self._previous_button_a = True
             self._previous_button_b = True
+            self._nsp_current_angles_deg.fill(0.0)
+            self._nsp_target_angles_deg[:] = (
+                0.0 if self.nsp_lateral_enabled else self.nsp_angles_deg
+            )
+            self._nsp_lateral_anchor_y = [None, None]
+            self._last_nsp_update_time = None
             q_command_rad = self._last_commanded_q_rad.copy()
             self.adapter.send_joint_command(q_command_rad)
             if self.session_logger is not None:
@@ -558,15 +710,19 @@ class MarvinHardwareTeleopController:
 
     def shutdown_hardware(self):
         try:
-            idle_command_sent = self.adapter.set_idle()
-            if idle_command_sent:
-                deadline = time.monotonic() + 2.0
-                while time.monotonic() < deadline:
-                    if self.adapter.read_state().arm_state == (0, 0):
-                        break
-                    time.sleep(0.01)
-                else:
-                    raise TimeoutError("Marvin did not enter idle state")
+            try:
+                idle_command_sent = self.adapter.set_idle()
+                if idle_command_sent:
+                    deadline = time.monotonic() + 2.0
+                    while time.monotonic() < deadline:
+                        if self.adapter.read_state().arm_state == (0, 0):
+                            break
+                        time.sleep(0.01)
+                    else:
+                        raise TimeoutError("Marvin did not enter idle state")
+            except Exception as error:
+                # Cleanup must not hide the original startup/runtime failure.
+                print(f"Marvin shutdown warning: {error}")
         finally:
             self.adapter.release()
             self.xr_client.close()
