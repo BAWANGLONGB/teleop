@@ -19,6 +19,9 @@ MuJoCo 的其余关节约束来自 MJCF 模型。
 
 ## 安装
 
+PC Service 与 PICO 安装文件的版本、校验和官方获取地址见
+[`../pico-service-software/README.md`](../pico-service-software/README.md)。
+
 ```bash
 sudo apt-get install build-essential pybind11-dev libjson-c-dev
 source /home/zxcx/TeleOp/.miniconda-xr/etc/profile.d/conda.sh
@@ -128,7 +131,7 @@ COM1/COM2。若 PICO 摇杆前后方向相反，启动时追加 `--thumbstick-y-
 
 ## 文档
 
-- [测试流程](docs/testing.md)
-- [MuJoCo 仿真流程](docs/simulation.md)
+- [首次部署（PC Service 与 PICO）](docs/首次部署.md)
+- [日常操作说明](docs/操作指南.md)
 - [项目结构、模块职责与命名](docs/project-structure.md)
 - [Marvin MuJoCo 资产说明](assets/marvin/README.md)

@@ -10,8 +10,8 @@ xr-marvin-teleop/
 ├── native/
 │   └── xrobotoolkit_sdk.cpp
 ├── docs/
-│   ├── testing.md
-│   ├── simulation.md
+│   ├── 首次部署.md
+│   ├── 操作指南.md
 │   └── project-structure.md
 ├── assets/marvin/
 │   ├── marvin_dual.mujoco.xml

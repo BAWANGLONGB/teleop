@@ -8,6 +8,8 @@
 | --- | --- |
 | [`TJArm/`](TJArm/) | Marvin 控制 SDK、运动学 SDK、配置、示例和厂家文档 |
 | [`xr-marvin-teleop/`](xr-marvin-teleop/) | PICO → 在线 scale 标定/读取 → 位姿映射 → Marvin IK → 双臂关节目标 |
+| [`xr-marvin-teleop/docs`](xr-marvin-teleop/docs) | 包含首次部署和操作说明文档|
+| [`pico-service-software/`](pico-service-software/) | PC Service/PICO 安装文件版本、SHA-256 和官方网络来源 |
 
 ## 环境
 
@@ -22,15 +24,6 @@ python -m pip install -e .
 
 ```bash
 python -m unittest discover -s tests -v
-```
-
-## PICO → MuJoCo
-
-先启动 XRoboToolkit PC Service，并在 PICO 中确认 `Network=WORKING`，打开
-`Head`、`Controller` 和 `Send`：
-
-```bash
-python scripts/simulation/teleop_marvin_mujoco.py
 ```
 
 ## 实机
@@ -52,6 +45,16 @@ PICO 端确认：
 
 仅在 PICO、MuJoCo、机型、A/B 关节映射、Tool 和物理急停全部确认后运行：
 
+最小指令
+```bash
+python scripts/hardware/teleop_marvin_hardware.py \
+  --enable-hardware \
+  --confirmed-estop \
+  --confirmed-joint-mapping \
+  --confirmed-robot-model "M6S-Lite-CCS-680-B" \
+```
+
+可选参数：`--nsp-lateral` `--nsp-max-angle 10`
 ```bash
 python scripts/hardware/teleop_marvin_hardware.py \
   --enable-hardware \
@@ -62,11 +65,8 @@ python scripts/hardware/teleop_marvin_hardware.py \
   --nsp-max-angle 10
 ```
 
-`--nsp-lateral` 在 Grip 按下期间将手柄横向位移映射为 IK_NSP 的 `ZSP_Angle`；
-最大偏角默认就是 `5°`。死区、满量程和角度变化速率可分别用
-`--nsp-lateral-deadzone`、`--nsp-lateral-range` 和 `--nsp-angle-rate` 调整。
-
-默认首次调试参数为 `velRatio=10`、`AccRatio=10`、`D=0.3`。完整启动、测试、
 标定、日志和仿真说明见 [`xr-marvin-teleop/README.md`](xr-marvin-teleop/README.md)。
+首次部署请先阅读[部署与验收文档](xr-marvin-teleop/docs/首次部署.md)，
+日常使用参见[操作说明](xr-marvin-teleop/docs/操作指南.md)。
 
 出现异常运动时优先使用物理急停；PICO 按键和程序退出不能替代急停。
