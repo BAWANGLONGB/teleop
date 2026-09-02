@@ -173,6 +173,7 @@ class MarvinSdkAdapter:
         marvin_robot=None,
         dcss_structure=None,
         gripper_configurations=None,
+        gripper_adapter=None,
     ):
         if marvin_robot is None or dcss_structure is None:
             if sdk_root_path is None:
@@ -185,6 +186,10 @@ class MarvinSdkAdapter:
         self._dcss_structure = dcss_structure
         self._is_connected = False
         self._is_released = False
+        if gripper_configurations is not None and gripper_adapter is not None:
+            raise ValueError(
+                "gripper_configurations and gripper_adapter are mutually exclusive"
+            )
         if gripper_configurations is not None:
             if (
                 len(gripper_configurations) != 2
@@ -199,35 +204,55 @@ class MarvinSdkAdapter:
                 )
             gripper_configurations = tuple(gripper_configurations)
         self.gripper_configurations = gripper_configurations
+        if gripper_adapter is not None and not hasattr(
+            gripper_adapter, "send_gripper_command"
+        ):
+            raise TypeError("gripper_adapter must provide send_gripper_command()")
+        self.gripper_adapter = gripper_adapter
 
     def connect(self):
         if self._is_connected:
             return
         if self._is_released:
             raise RuntimeError("a released Marvin control SDK cannot reconnect")
-        compatibility_check = getattr(
-            self._marvin_robot, "check_sdk_type_compat", None
-        )
-        if compatibility_check is not None:
-            compatibility_result = compatibility_check()
-            status_code = (
-                compatibility_result[0]
-                if isinstance(compatibility_result, tuple)
-                else compatibility_result
+        try:
+            # DAS is a preflight dependency: never enable Marvin if finger
+            # startup, encoder feedback, or calibration readiness fails.
+            if self.gripper_adapter is not None:
+                self.gripper_adapter.connect()
+            compatibility_check = getattr(
+                self._marvin_robot, "check_sdk_type_compat", None
             )
-            if status_code is not None and status_code < 0:
-                raise RuntimeError("Marvin SDK ABI compatibility check failed")
-        if not self._marvin_robot.connect(self.robot_ip_address):
-            raise ConnectionError(
-                f"failed to connect to Marvin at {self.robot_ip_address}"
-            )
-        self._is_connected = True
-        if self.gripper_configurations is not None:
-            for arm_name in ("A", "B"):
-                if not self._marvin_robot.clear_ch_data(arm_name):
-                    raise RuntimeError(
-                        f"failed to clear arm {arm_name} gripper channel"
-                    )
+            if compatibility_check is not None:
+                compatibility_result = compatibility_check()
+                status_code = (
+                    compatibility_result[0]
+                    if isinstance(compatibility_result, tuple)
+                    else compatibility_result
+                )
+                if status_code is not None and status_code < 0:
+                    raise RuntimeError("Marvin SDK ABI compatibility check failed")
+            if not self._marvin_robot.connect(self.robot_ip_address):
+                raise ConnectionError(
+                    f"failed to connect to Marvin at {self.robot_ip_address}"
+                )
+            self._is_connected = True
+            if self.gripper_configurations is not None:
+                for arm_name in ("A", "B"):
+                    if not self._marvin_robot.clear_ch_data(arm_name):
+                        raise RuntimeError(
+                            f"failed to clear arm {arm_name} gripper channel"
+                        )
+        except Exception:
+            if self._is_connected:
+                self._marvin_robot.release_robot()
+            self._is_connected = False
+            if self.gripper_adapter is not None:
+                try:
+                    self.gripper_adapter.release()
+                except Exception:
+                    pass
+            raise
 
     def sdk_version(self):
         version_getter = getattr(self._marvin_robot, "SDK_version", None)
@@ -256,6 +281,10 @@ class MarvinSdkAdapter:
     def read_state(self):
         if not self._is_connected:
             raise RuntimeError("Marvin control SDK is not connected")
+        if self.gripper_adapter is not None:
+            health_check = getattr(self.gripper_adapter, "check_health", None)
+            if callable(health_check):
+                health_check()
         raw_feedback = self._marvin_robot.subscribe(self._dcss_structure)
         if not isinstance(raw_feedback, dict):
             raise RuntimeError("Marvin subscribe() returned invalid feedback")
@@ -368,6 +397,8 @@ class MarvinSdkAdapter:
     def send_gripper_command(self, closedness):
         if not self._is_connected:
             raise RuntimeError("Marvin control SDK is not connected")
+        if self.gripper_adapter is not None:
+            return self.gripper_adapter.send_gripper_command(closedness)
         if self.gripper_configurations is None:
             raise RuntimeError("Marvin gripper protocol is not configured")
         closedness = np.asarray(closedness, dtype=float).reshape(-1)
@@ -402,6 +433,23 @@ class MarvinSdkAdapter:
             targets.append(target)
         # ponytail: validate the Modbus echo once the vendor's reply timing is known.
         return tuple(targets)
+
+    def get_initial_gripper_closedness(self):
+        if not self._is_connected:
+            raise RuntimeError("Marvin control SDK is not connected")
+        if self.gripper_adapter is not None:
+            return self.gripper_adapter.get_initial_gripper_closedness()
+        if self.gripper_configurations is not None:
+            return tuple(
+                config.initial_closedness for config in self.gripper_configurations
+            )
+        raise RuntimeError("Marvin gripper protocol is not configured")
+
+    def get_gripper_state(self):
+        if self.gripper_adapter is None:
+            return None
+        state_getter = getattr(self.gripper_adapter, "get_gripper_state", None)
+        return None if state_getter is None else state_getter()
 
     @staticmethod
     def _validate_joint_impedance(values, field_name, upper_bound):
@@ -500,7 +548,9 @@ class MarvinSdkAdapter:
                 )
         self._send_transaction(
             setters,
-            wait_for_response=True,
+            # Marvin's parameter/tool transaction is acknowledged asynchronously;
+            # the vendor examples use send_cmd() and settle before changing mode.
+            wait_for_response=False,
             transaction_name="control parameter configuration",
         )
 
@@ -563,27 +613,47 @@ class MarvinSdkAdapter:
     def set_idle(self):
         if not self._is_connected:
             return False
-        self._send_transaction(
-            tuple(
-                (
-                    f"arm {sdk_arm_name} idle state",
-                    lambda sdk_arm_name=sdk_arm_name: self._marvin_robot.set_state(
-                        arm=sdk_arm_name, state=0
-                    ),
-                )
-                for sdk_arm_name in ("A", "B")
-            ),
-            True,
-            "idle mode switch",
-        )
+        gripper_error = None
+        if self.gripper_adapter is not None:
+            try:
+                self.gripper_adapter.set_idle()
+            except Exception as error:
+                gripper_error = error
+        arm_error = None
+        try:
+            self._send_transaction(
+                tuple(
+                    (
+                        f"arm {sdk_arm_name} idle state",
+                        lambda sdk_arm_name=sdk_arm_name: self._marvin_robot.set_state(
+                            arm=sdk_arm_name, state=0
+                        ),
+                    )
+                    for sdk_arm_name in ("A", "B")
+                ),
+                True,
+                "idle mode switch",
+            )
+        except Exception as error:
+            arm_error = error
+        if gripper_error is not None:
+            raise RuntimeError(
+                "DAS gripper idle transition failed"
+            ) from gripper_error
+        if arm_error is not None:
+            raise arm_error
         return True
 
     def release(self):
         if not self._is_released:
             self._is_released = True
-            if self._is_connected:
-                self._marvin_robot.release_robot()
-            self._is_connected = False
+            try:
+                if self.gripper_adapter is not None:
+                    self.gripper_adapter.release()
+            finally:
+                if self._is_connected:
+                    self._marvin_robot.release_robot()
+                self._is_connected = False
 
 
 def load_active_tool_configs(tools_configuration_path):

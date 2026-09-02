@@ -59,7 +59,7 @@ python scripts/simulation/teleop_marvin_mujoco.py --headless \
 `--nsp-lateral-deadzone` 和 `--nsp-lateral-range` 调整。左右硬件的角度方向不一致
 时，可用 `--nsp-lateral-sign-left/right {-1,1}` 校准。NSP 失败、超限或单步变化过大
 时回退普通 IK；不提供 `--nsp-lateral` 或旧的 `--nsp-angle-left/right` 时保持普通 IK
-路径。默认左右 sign 都为 `+1`：Marvin `+Y`（手柄向右）使右臂沉肘、左臂抬肘，
+路径。默认左右 sign 都为 `+1`：Marvin `+X`（手柄向右）使右臂沉肘、左臂抬肘，
 反向移动则相反；旧参数仍保留用于固定角度兼容场景。
 
 ## 日志回放
@@ -87,6 +87,7 @@ ss -lnt | grep -E ':(63901|60061)\b'
 仅在测试和现场确认全部通过后运行：
 
 ```bash
+unset LD_PRELOAD
 python scripts/hardware/teleop_marvin_hardware.py \
   --enable-hardware \
   --confirmed-estop \
@@ -94,8 +95,8 @@ python scripts/hardware/teleop_marvin_hardware.py \
   --confirmed-robot-model "M6S-Lite-CCS-680-B"
 ```
 
-真机夹爪默认禁用。拿到夹爪厂商的 Modbus-RTU 单寄存器位置协议并完成空载验证后，
-为 `--gripper-config` 提供左右臂配置：
+真机默认不启用夹爪。若使用 Marvin Modbus，完成厂商协议和空载验证后，为
+`--gripper-config` 提供左右臂配置：
 
 ```jsonc
 {
@@ -120,11 +121,143 @@ python scripts/hardware/teleop_marvin_hardware.py \
 
 尖括号是说明文字，实际文件必须替换成整数/浮点数。`channel=2/3` 分别对应
 COM1/COM2。若 PICO 摇杆前后方向相反，启动时追加 `--thumbstick-y-sign -1`。
-没有准确协议时不要提供此参数，程序不会向夹爪发送任何帧。
+没有准确协议时不要提供此参数，程序不会向 Marvin Modbus 夹爪发送任何帧。
+
+### DAS Finger Controller 夹爪
+
+DAS 夹爪控制使用官方 Python SDK，不依赖 ROS2。先按官方仓库完成安装和 USB/udev
+配置，并准备 SDK checkout 路径：
+
+```bash
+git clone https://github.com/genrobot-ai/gen_finger_con_python_sdk_release.git \
+  /home/zxcx/TeleOp/gen_finger_con_python_sdk_release
+python -m pip install -r \
+  /home/zxcx/TeleOp/gen_finger_con_python_sdk_release/requirements.txt
+```
+
+依赖必须安装到运行本 TeleOp 的同一个 `Teleop` Python 环境；不要只安装在另一个
+SDK 虚拟环境中，否则 `FingerSystem` 无法被当前进程加载。
+
+复制 [`config/das_gripper.example.json`](config/das_gripper.example.json)，按实际
+空载行程修改 `closed_distance_m`、`open_distance_m` 和区间内的安全
+`startup_distance_m`。DAS 只在显式提供以下两个参数时启用：
+
+```bash
+unset LD_PRELOAD
+python scripts/hardware/teleop_marvin_hardware.py \
+  --enable-hardware \
+  --confirmed-estop \
+  --confirmed-joint-mapping \
+  --confirmed-robot-model "M6S-Lite-CCS-680-B" \
+  --das-gripper-config config/das_gripper.example.json \
+  --das-sdk-root /home/zxcx/TeleOp/gen_finger_con_python_sdk_release
+```
+
+程序先完成 DAS 自检，再连接 Marvin；首个编码器请求携带配置的安全启动距离。
+若仍返回 `-66.66`，清空对应夹爪并单独标定（该命令不会连接 Marvin）：
+
+```bash
+python scripts/hardware/calibrate_das_finger.py \
+  --config config/das_gripper.example.json \
+  --side left --confirmed-gripper-clear
+```
+
+Trigger 或摇杆后拉闭合，摇杆前推张开，输入释放后保持。
+
+### ROS2 数据采集（可选）
+
+ROS2 是采集数据总线，也是 PICO 与控制任务之间的边界。PICO SDK 由独立进程独占，
+实机控制订阅 PICO，并异步发布 Marvin、DAS 和实际下发命令；录制背压不会进入控制
+线程。先安装 MCAP 后端、构建消息包并 source：
+
+```bash
+sudo apt-get install ros-humble-rosbag2-storage-mcap
+cd ros2_ws
+colcon build --packages-select teleop_msgs \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 \
+  -DPYTHON_EXECUTABLE=/usr/bin/python3
+source install/setup.bash
+cd ..
+```
+
+以下每个终端都需要激活 `Teleop` 环境并 source 同一个 `install/setup.bash`。如果当前
+终端曾设置系统 `libstdc++` 预加载，先清除：
+
+```bash
+unset LD_PRELOAD
+```
+
+推荐使用 supervisor 一条命令启动 PICO、recorder 和硬件控制，并在退出时按安全顺序
+收尾：
+
+```bash
+python scripts/data/run_collection.py \
+  --task pick_and_place \
+  --operator zxcx \
+  --robot-model "M6S-Lite-CCS-680-B" \
+  --enable-hardware \
+  --confirmed-estop \
+  --confirmed-joint-mapping \
+  --das-config config/das_gripper.example.json \
+  --das-sdk-root /home/zxcx/TeleOp/gen_finger_con_python_sdk_release
+```
+
+它会等待有效 PICO 帧后启动 recorder，再使能 Marvin；按一次 `Ctrl+C` 后依次停止
+硬件、完成 MCAP/manifest、停止 PICO。Pico PC Service 仍需提前独立启动。完整 SOP 见
+[日常操作说明](docs/操作指南.md)。如需分进程排障，按以下顺序开三个终端。终端 1
+发布 PICO 原始输入：
+
+```bash
+python scripts/data/publish_pico.py
+```
+
+终端 2 创建 episode，并把状态/触觉和原始图像分别写入两个 MCAP：
+
+```bash
+python scripts/data/record_episode.py \
+  --task pick_and_place \
+  --operator zxcx \
+  --calibration logs/marvin_scale_calibration.json \
+  --calibration config/das_gripper.example.json
+```
+
+终端 3 启动实机，硬件确认参数保持不变，并追加：
+
+```text
+--ros2 --pico-from-ros2
+```
+
+主要话题如下；每个流独立编号，不再生成中心化 `/teleop/sample`：
+
+| 类别 | 话题 |
+| --- | --- |
+| PICO | `/raw/pico/frame` |
+| Marvin | `/raw/marvin/joint_state`、`/command/marvin/joint_target` |
+| DAS | `/raw/das/{left,right}/state`、`/command/das/target` |
+| 触觉 | `/raw/das/{left,right}/tactile` |
+| 图像 | `/raw/das/{left,right}/image` |
+| 运行状态 | `/diagnostics`、`/episode/state`、`/episode/event` |
+
+`header.stamp` 是采集机墙钟，`receive_steady_ns` 是不受校时影响的本机单调时钟，
+`source_timestamp_ns` 保存设备原始时间戳；设备不提供硬件时间时该字段为 `0`。
+离线按时间戳对齐，禁止控制线程等待多传感器凑齐一帧。图像保持原始
+`sensor_msgs/Image`，由 MCAP Zstd 压缩。
+
+默认输出为 `dataset/session_<date>/episode_<time>_<id>/`，其中 `state/` 与
+`vision/` 是独立 bag，`calibration/` 保存标定配置快照，`metadata.json` 保存任务、
+操作者、代码版本和标定哈希，`manifest.json` 保存消息统计、时序/序号异常和文件
+SHA-256。录制结束自动校验，也可重新执行：
+
+```bash
+python scripts/data/validate_episode.py \
+  dataset/session_<date>/episode_<time>_<id>
+```
+
+JSONL 继续作为控制调试日志，不作为训练数据的主格式。
 
 默认 K 为 `5 5 5 5 4 3 3`，D 为 `0.3 0.3 0.3 0.3 0.3 0.3 0.3`。覆盖参数使用
 `--left-k/--left-d/--right-k/--right-d`，未经现场批准不要调节。
-实机默认按 SDK 的 PD 遥操建议使用 `200 Hz / 5 ms`，并在进入关节阻抗前为
+实机默认使用 `50 Hz / 20 ms`，并在进入关节阻抗前为
 双臂设置调试值 `velRatio=10`、`AccRatio=10`。充分测试后才能手动提高。需要覆盖时使用
 `--control-hz`、`--joint-velocity-ratio` 和 `--joint-acceleration-ratio`。
 控制参数、模式和 PD 前馈设置后分别等待 `0.2 s / 1 s / 1 s` 并复核反馈。

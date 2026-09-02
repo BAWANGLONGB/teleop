@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Minimal PICO XR teleoperation for Marvin dual arms"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["meshcat", "mujoco", "numpy"]
+dependencies = ["mujoco", "numpy"]
 
 [tool.setuptools.packages.find]
 include = ["xr_marvin_teleop*"]

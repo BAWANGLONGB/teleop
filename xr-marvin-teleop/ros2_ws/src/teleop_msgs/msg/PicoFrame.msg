@@ -1,0 +1,12 @@
+std_msgs/Header header
+uint64 sequence_id
+uint64 source_timestamp_ns
+uint64 receive_steady_ns
+bool valid
+float64[7] left_controller_pose
+float64[7] right_controller_pose
+float64[2] grip_values
+float64[2] trigger_values
+float64[2] thumbstick_y_values
+bool button_a
+bool button_b

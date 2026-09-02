@@ -7,7 +7,7 @@
 | 路径 | 内容 |
 | --- | --- |
 | [`TJArm/`](TJArm/) | Marvin 控制 SDK、运动学 SDK、配置、示例和厂家文档 |
-| [`xr-marvin-teleop/`](xr-marvin-teleop/) | PICO → 在线 scale 标定/读取 → 位姿映射 → Marvin IK → 双臂关节目标 |
+| [`xr-marvin-teleop/`](xr-marvin-teleop/) | PICO → Marvin 双臂控制，以及 ROS2 原始流与双 MCAP 数据采集 |
 | [`xr-marvin-teleop/docs`](xr-marvin-teleop/docs) | 包含首次部署和操作说明文档|
 | [`pico-service-software/`](pico-service-software/) | PC Service/PICO 安装文件版本、SHA-256 和官方网络来源 |
 
@@ -47,11 +47,20 @@ PICO 端确认：
 
 最小指令
 ```bash
-python scripts/hardware/teleop_marvin_hardware.py \
-  --enable-hardware \
-  --confirmed-estop \
-  --confirmed-joint-mapping \
-  --confirmed-robot-model "M6S-Lite-CCS-680-B" \
+  source /home/zxcx/TeleOp/.miniconda-xr/etc/profile.d/conda.sh
+  conda activate Teleop
+  cd /home/zxcx/TeleOp/xr-marvin-teleop
+
+  python -m pip install -e . --no-build-isolation
+
+  python scripts/hardware/teleop_marvin_hardware.py \
+    --enable-hardware \
+    --confirmed-estop \
+    --confirmed-joint-mapping \
+    --confirmed-robot-model "M6S-Lite-CCS-680-B" \
+    --das-gripper-config config/das_gripper.example.json \
+    --das-sdk-root /home/zxcx/TeleOp/gen_finger_con_python_sdk_release
+
 ```
 
 可选参数：`--nsp-lateral` `--nsp-max-angle 10`

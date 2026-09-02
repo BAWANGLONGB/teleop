@@ -7,8 +7,13 @@ xr-marvin-teleop/
 ├── README.md
 ├── pyproject.toml
 ├── setup.py
+├── config/
+│   ├── das_gripper.example.json
+│   └── data_collection/
 ├── native/
 │   └── xrobotoolkit_sdk.cpp
+├── ros2_ws/src/teleop_msgs/
+│   └── msg/
 ├── docs/
 │   ├── 首次部署.md
 │   ├── 操作指南.md
@@ -19,6 +24,11 @@ xr-marvin-teleop/
 │   ├── marvin_dual.manifest.json
 │   └── meshes/
 ├── scripts/
+│   ├── data/
+│   │   ├── publish_pico.py
+│   │   ├── record_episode.py
+│   │   ├── run_collection.py
+│   │   └── validate_episode.py
 │   ├── hardware/
 │   │   └── teleop_marvin_hardware.py
 │   └── simulation/
@@ -28,6 +38,7 @@ xr-marvin-teleop/
 │   └── test_marvin_hardware.py
 └── xr_marvin_teleop/
     ├── common/
+    │   ├── episode_validator.py
     │   ├── marvin_postures.py
     │   ├── marvin_scale_calibration.py
     │   ├── marvin_session_logger.py
@@ -36,13 +47,17 @@ xr-marvin-teleop/
     ├── hardware/
     │   ├── marvin_teleop_controller.py
     │   └── interface/
+    │       ├── das_finger.py
     │       ├── marvin.py
     │       └── marvin_kinematics.py
+    ├── ros/
+    │   ├── pico_client.py
+    │   └── telemetry_bridge.py
     └── simulation/
         └── marvin_mujoco_adapter.py
 ```
 
-`__pycache__/`、`*.egg-info/` 和 `logs/` 是运行生成内容，不属于核心源码结构。
+`__pycache__/`、`*.egg-info/`、`logs/` 和 `dataset/` 是运行生成内容，不属于核心源码结构。
 
 ## 2. 模块职责
 
@@ -56,9 +71,15 @@ xr-marvin-teleop/
 | `common/marvin_session_logger.py` | 非阻塞 JSONL 控制周期日志与回放记录读取 |
 | `hardware/interface/marvin_kinematics.py` | 厂家 FK/IK 的米/弧度边界和 IK 异常解释 |
 | `hardware/interface/marvin.py` | 控制 SDK 连接、反馈预热、速度/加速度、K/D、Tool 和 `set_joint_cmd_pose(A/B)` |
+| `hardware/interface/das_finger.py` | DAS 左右夹爪 Python SDK 生命周期、编码器初始化和闭合度→开口距离转换 |
 | `hardware/marvin_teleop_controller.py` | 共享遥操状态、IK、B 键回位和最终关节目标 |
+| `ros/pico_client.py` | 订阅独立 PICO 原始流并提供与 `XrClient` 相同的控制快照接口 |
+| `ros/telemetry_bridge.py` | 有界非阻塞发布 PICO、Marvin、DAS、命令、触觉、原始图像和诊断 |
+| `common/episode_validator.py` | 离线检查 MCAP 话题、频率、时间回退、序号缺口和文件哈希 |
+| `ros2_ws/src/teleop_msgs` | 各原始数据流和命令的 ROS2 消息定义 |
 | `simulation/marvin_mujoco_adapter.py` | 用 MuJoCo 实现与硬件适配器相同的最小控制接口 |
-| `scripts/hardware/...` | 实机确认参数、依赖组装和启动入口 |
+| `scripts/hardware/...` | 实机确认参数、DAS 独立标定、依赖组装和启动入口 |
+| `scripts/data/...` | 单命令 supervisor、PICO 发布、双 MCAP 录制和离线校验入口 |
 | `scripts/simulation/teleop_...` | PICO → MuJoCo 组装和启动入口 |
 | `scripts/simulation/replay_...` | JSONL command/feedback 回放入口 |
 | `tests/test_marvin_hardware.py` | 合成 XR、真实厂家 IK、SDK mock 和 headless MuJoCo 回归 |

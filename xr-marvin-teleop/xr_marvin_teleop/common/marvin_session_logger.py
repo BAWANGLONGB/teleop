@@ -39,6 +39,7 @@ class MarvinSessionLogger:
         self._queue = queue.SimpleQueue()
         self._stop_token = object()
         self._writer_error = None
+        self._sample_id = 0
         self._thread = threading.Thread(
             target=self._write_records,
             name="marvin-session-logger",
@@ -74,13 +75,31 @@ class MarvinSessionLogger:
         q_command_rad,
         scale_factor,
         gripper_command_closedness=None,
+        gripper_state=None,
+        sample_id=None,
+        sample_monotonic_ns=None,
+        wall_time_ns=None,
     ):
         if self._thread is None:
             raise RuntimeError("Marvin session logger is closed")
+        if sample_id is None:
+            self._sample_id += 1
+            sample_id = self._sample_id
+        else:
+            sample_id = int(sample_id)
+            self._sample_id = max(self._sample_id, sample_id)
+        sample_monotonic_ns = (
+            time.monotonic_ns()
+            if sample_monotonic_ns is None
+            else int(sample_monotonic_ns)
+        )
+        wall_time_ns = time.time_ns() if wall_time_ns is None else int(wall_time_ns)
         record = {
-            "schema_version": 1,
+            "schema_version": 2,
             "event": "control_cycle",
-            "monotonic_time_ns": time.monotonic_ns(),
+            "sample_id": sample_id,
+            "monotonic_time_ns": sample_monotonic_ns,
+            "wall_time_ns": wall_time_ns,
             "xr_frame_valid": xr_snapshot is not None,
             "xr_timestamp_ns": (
                 None if xr_snapshot is None else xr_snapshot.timestamp_ns
@@ -101,10 +120,34 @@ class MarvinSessionLogger:
             "button_a": None if xr_snapshot is None else xr_snapshot.button_a,
             "button_b": None if xr_snapshot is None else xr_snapshot.button_b,
             "gripper_command_closedness": gripper_command_closedness,
+            "gripper_feedback_distance_m": (
+                None if gripper_state is None else gripper_state["distance_m"]
+            ),
+            "gripper_target_distance_m": (
+                None
+                if gripper_state is None
+                else gripper_state["target_distance_m"]
+            ),
+            "gripper_encoder_monotonic_ns": (
+                None
+                if gripper_state is None
+                else gripper_state["encoder_monotonic_ns"]
+            ),
+            "gripper_encoder_wall_time_ns": (
+                None
+                if gripper_state is None
+                else gripper_state["encoder_wall_time_ns"]
+            ),
+            "gripper_encoder_valid": (
+                None
+                if gripper_state is None
+                else gripper_state["encoder_valid"]
+            ),
             "scale_factor": scale_factor,
             "frame_serial": robot_feedback.frame_serial,
             "arm_state": robot_feedback.arm_state,
             "error_code": robot_feedback.error_code,
+            "low_speed": robot_feedback.low_speed,
             "q_feedback_rad": robot_feedback.q_rad,
             "dq_feedback_rad_s": robot_feedback.dq_rad_s,
             "q_command_rad": np.asarray(q_command_rad, dtype=float),

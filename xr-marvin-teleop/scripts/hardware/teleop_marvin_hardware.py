@@ -10,6 +10,10 @@ from xr_marvin_teleop.hardware.interface.marvin import (
     load_active_tool_configs,
     load_modbus_gripper_configurations,
 )
+from xr_marvin_teleop.hardware.interface.das_finger import (
+    DASFingerAdapter,
+    load_das_finger_configurations,
+)
 from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
     MarvinVendorKinematics,
 )
@@ -27,6 +31,8 @@ from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     DEFAULT_NSP_LATERAL_MAX_ANGLE_DEG,
     MarvinHardwareTeleopController,
 )
+from xr_marvin_teleop.ros.telemetry_bridge import Ros2TelemetryBridge
+from xr_marvin_teleop.ros.pico_client import RosPicoClient
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -36,7 +42,7 @@ DEFAULT_SCALE_CALIBRATION = PROJECT_ROOT / "logs" / "marvin_scale_calibration.js
 DEFAULT_LOG_DIRECTORY = PROJECT_ROOT / "logs"
 
 
-def parse_command_line_arguments():
+def parse_command_line_arguments(arguments=None):
     parser = argparse.ArgumentParser(
         description="Minimal PICO-to-Marvin dual-arm teleoperation"
     )
@@ -55,8 +61,36 @@ def parse_command_line_arguments():
     parser.add_argument(
         "--gripper-config",
         type=Path,
-        help="validated per-arm Modbus register and position settings",
+        help="validated per-arm Marvin Modbus register and position settings",
     )
+    parser.add_argument(
+        "--das-gripper-config",
+        type=Path,
+        help="validated per-arm DAS serial, camera, and distance settings",
+    )
+    parser.add_argument(
+        "--das-sdk-root",
+        type=Path,
+        default=None,
+        help="root of the gen_finger_con_python_sdk_release checkout",
+    )
+    parser.add_argument(
+        "--das-command-hz", type=float, default=50.0
+    )
+    parser.add_argument(
+        "--das-ready-timeout", type=float, default=10.0
+    )
+    parser.add_argument(
+        "--ros2",
+        action="store_true",
+        help="publish native PICO, Marvin, DAS, command, tactile, and image streams",
+    )
+    parser.add_argument(
+        "--pico-from-ros2",
+        action="store_true",
+        help="subscribe to the independent raw PICO publisher instead of opening SDK",
+    )
+    parser.add_argument("--pico-topic", default="/raw/pico/frame")
     parser.add_argument(
         "--gripper-rate", type=float, default=DEFAULT_GRIPPER_RATE
     )
@@ -155,11 +189,25 @@ def parse_command_line_arguments():
     parser.add_argument(
         "--expected-sdk-version", type=int, default=100343014
     )
-    return parser.parse_args(), parser
+    return parser.parse_args(arguments), parser
 
 
 def main():
     arguments, parser = parse_command_line_arguments()
+    if (
+        arguments.gripper_config is not None
+        and arguments.das_gripper_config is not None
+    ):
+        parser.error(
+            "--gripper-config and --das-gripper-config are mutually exclusive"
+        )
+    if arguments.das_gripper_config is not None and arguments.das_sdk_root is None:
+        parser.error("--das-sdk-root is required with --das-gripper-config")
+    if arguments.ros2 and not arguments.pico_from_ros2:
+        parser.error(
+            "--ros2 collection requires the independent PICO source: "
+            "start scripts/data/publish_pico.py and add --pico-from-ros2"
+        )
     missing_confirmations = []
     if not arguments.enable_hardware:
         missing_confirmations.append("--enable-hardware")
@@ -174,7 +222,12 @@ def main():
             "required hardware confirmations: " + ", ".join(missing_confirmations)
         )
 
-    with closing(XrClient()) as xr_client:
+    xr_source = (
+        RosPicoClient(arguments.pico_topic)
+        if arguments.pico_from_ros2
+        else XrClient()
+    )
+    with closing(xr_source) as xr_client:
         marvin_kinematics = MarvinVendorKinematics(
             arguments.sdk_root,
             arguments.kinematics_config_path,
@@ -182,11 +235,42 @@ def main():
         active_tool_configurations = load_active_tool_configs(
             arguments.tools_config
         )
-        gripper_configurations = (
+        modbus_gripper_configurations = (
             None
             if arguments.gripper_config is None
             else load_modbus_gripper_configurations(arguments.gripper_config)
         )
+        telemetry_bridge = (
+            Ros2TelemetryBridge()
+            if arguments.ros2
+            else None
+        )
+        das_gripper_adapter = None
+        if arguments.das_gripper_config is not None:
+            das_gripper_configurations = load_das_finger_configurations(
+                arguments.das_gripper_config
+            )
+            das_gripper_adapter = DASFingerAdapter(
+                das_gripper_configurations,
+                sdk_root_path=arguments.das_sdk_root,
+                command_hz=arguments.das_command_hz,
+                ready_timeout_seconds=arguments.das_ready_timeout,
+                state_callback=(
+                    None
+                    if telemetry_bridge is None
+                    else telemetry_bridge.publish_das_state
+                ),
+                tactile_callback=(
+                    None
+                    if telemetry_bridge is None
+                    else telemetry_bridge.publish_tactile
+                ),
+                frame_callback=(
+                    None
+                    if telemetry_bridge is None
+                    else telemetry_bridge.publish_camera
+                ),
+            )
         for arm_index, tool_configuration in enumerate(active_tool_configurations):
             marvin_kinematics.set_tool(
                 arm_index, tool_configuration.kinematics_mm_deg
@@ -194,7 +278,8 @@ def main():
         marvin_adapter = MarvinSdkAdapter(
             robot_ip_address=arguments.robot_ip,
             sdk_root_path=arguments.sdk_root,
-            gripper_configurations=gripper_configurations,
+            gripper_configurations=modbus_gripper_configurations,
+            gripper_adapter=das_gripper_adapter,
         )
         session_logger = MarvinSessionLogger(
             arguments.log_directory, "hardware"
@@ -217,13 +302,17 @@ def main():
             return_duration=arguments.return_duration,
             expected_sdk_version=arguments.expected_sdk_version,
             session_logger=session_logger,
-            gripper_control_enabled=gripper_configurations is not None,
+            telemetry_publisher=telemetry_bridge,
+            gripper_control_enabled=(
+                modbus_gripper_configurations is not None
+                or das_gripper_adapter is not None
+            ),
             initial_gripper_closedness=(
                 (0.0, 0.0)
-                if gripper_configurations is None
+                if modbus_gripper_configurations is None
                 else tuple(
                     config.initial_closedness
-                    for config in gripper_configurations
+                    for config in modbus_gripper_configurations
                 )
             ),
             gripper_rate=arguments.gripper_rate,

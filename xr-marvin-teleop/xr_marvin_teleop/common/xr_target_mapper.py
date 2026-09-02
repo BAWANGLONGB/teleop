@@ -1,18 +1,27 @@
-import meshcat.transformations as transformations
 import numpy as np
 
 
-# OpenXR right/up/back -> Marvin +Y/+Z/+X.
+# Operator stands behind Marvin: OpenXR right/up/forward -> Marvin +X/+Z/+Y.
 OPENXR_TO_MARVIN_ROTATION = np.array(
-    [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    [[1.0, 0.0, 0.0], 
+     [0.0, 0.0, -1.0], 
+     [0.0, 1.0, 0.0]]
 )
 
 
 def _rotation_matrix_from_openxr_pose(openxr_pose):
-    quaternion_wxyz = np.array(
-        [openxr_pose[6], openxr_pose[3], openxr_pose[4], openxr_pose[5]]
+    quaternion = np.asarray(openxr_pose[3:], dtype=float)
+    norm_squared = np.dot(quaternion, quaternion)
+    if norm_squared < 4.0 * np.finfo(float).eps:
+        return np.eye(3)
+    x, y, z, w = quaternion * np.sqrt(2.0 / norm_squared)
+    return np.array(
+        [
+            [1.0 - y * y - z * z, x * y - z * w, x * z + y * w],
+            [x * y + z * w, 1.0 - x * x - z * z, y * z - x * w],
+            [x * z - y * w, y * z + x * w, 1.0 - x * x - y * y],
+        ]
     )
-    return transformations.quaternion_matrix(quaternion_wxyz)[:3, :3]
 
 
 def transform_controller_poses_to_marvin_frame(xr_snapshot):

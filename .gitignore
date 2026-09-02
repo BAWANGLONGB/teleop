@@ -64,6 +64,8 @@ TJArm/tj_fx_robot-master/SDK_PYTHON/libMarvinSDK.so
 /xrobotoolkit-marvin-teleop.backup-*/
 /IsaacTeleop-main/
 /xr-marvin-teleop/logs/
+/xr-marvin-teleop/dataset/
+/gen_finger_con_python_sdk_release/
 
 
 # Keep current Marvin teleoperation logs in the cloud snapshot.

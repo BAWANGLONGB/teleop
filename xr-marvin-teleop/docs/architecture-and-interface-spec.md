@@ -213,7 +213,8 @@ XrTargetMapper(scale_factor).map_arm(
 ) -> ndarray(4, 4) | None
 ```
 
-坐标约定为 OpenXR `right/up/back -> Marvin +Y/+Z/+X`。第一次 active 调用同时
+操作者位于 Marvin 身后时，坐标约定为 OpenXR
+`right/up/forward -> Marvin +X/+Z/+Y`。第一次 active 调用同时
 记录手柄位姿和机器人 TCP，并返回当前 TCP；后续平移使用
 `tcp_anchor + scale × controller_delta`，旋转使用相对手柄旋转。inactive 调用
 清除该臂锚点并返回 `None`。
@@ -249,7 +250,7 @@ close() -> None
 ### 5.2 每周期优先级
 
 每个周期先读 XR 和机器人反馈，再检查机器人健康/帧号，最后生成并发送一个
-14 轴目标。默认实机频率为 `200 Hz`，允许范围为 `[50,200] Hz`，且周期必须
+14 轴目标。默认实机频率为 `50 Hz`，允许范围为 `[50,200] Hz`，且周期必须
 对应整数毫秒的 PD period。
 
 | 输入/状态 | 该臂行为 |
@@ -265,8 +266,10 @@ close() -> None
 
 夹爪使用独立的归一化闭合度，`0` 为全开、`1` 为全闭。Trigger 和摇杆后拉取
 较大值增量闭合，摇杆前推增量打开，输入回中后保持；Trigger 与前推冲突时闭合
-优先。计算跟随主控制周期，实机 Modbus 位置目标最多按 `20 Hz` 下发。XR stale
-和程序退出都保持最后目标，不自动开爪。
+优先。计算跟随主控制周期，位置目标最多按 `20 Hz` 下发。Marvin Modbus 后端直接
+发送寄存器帧；DAS 后端通过 `DASFingerAdapter` 将闭合度转换为标定的开口距离，并
+在独立工作线程中调用官方 Python SDK，避免阻塞机械臂控制循环。XR stale 和程序
+退出都保持最后目标，不自动开爪。
 
 可选 IK_NSP 在每臂启动反馈姿态上缓存参考臂角平面，按配置的角度斜率渐变目标
 臂角。启用 `--nsp-lateral` 时，Grip 按下瞬间记录该臂手柄的 Marvin `+Y` 横向
@@ -342,19 +345,47 @@ scale 来源优先级为：命令行显式值 > 有效标定文件 > 默认 `1.2
 
 ### 7.2 控制周期 JSONL
 
-每行是 `schema_version=1`、`event="control_cycle"`，至少包含：
+每行是 `schema_version=2`、`event="control_cycle"`，至少包含：
 
 ```text
-monotonic_time_ns, xr_frame_valid, xr_timestamp_ns,
+sample_id, monotonic_time_ns, wall_time_ns, xr_frame_valid, xr_timestamp_ns,
 left_controller_pose, right_controller_pose,
 grip_values, trigger_values, thumbstick_y_values, button_a, button_b,
-gripper_command_closedness, scale_factor,
-frame_serial, arm_state, error_code,
+gripper_command_closedness, gripper_feedback_distance_m,
+gripper_target_distance_m, gripper_encoder_monotonic_ns,
+gripper_encoder_wall_time_ns, gripper_encoder_valid, scale_factor,
+frame_serial, arm_state, error_code, low_speed,
 q_feedback_rad, dq_feedback_rad_s, q_command_rad
 ```
 
 XR stale 保持周期仍写日志，但 XR 字段为 `null`。回放读取器忽略其他 event，并
 要求 `q_feedback_rad`、`q_command_rad` 都是 14 个有限数值。
+
+### 7.3 ROS2 原始采集流
+
+采集不再把不同频率的数据拼成 `/teleop/sample`。各数据源按自身节拍发布：
+
+```text
+PICO SDK 独立进程 → /raw/pico/frame → 实机控制订阅
+Marvin SDK 回调/轮询 → /raw/marvin/joint_state
+控制实际下发       → /command/marvin/joint_target、/command/das/target
+DAS SDK 回调        → /raw/das/{side}/state、tactile、image
+                              ↓
+                  state/ / vision/ MCAP
+                              ↓
+                 离线时间对齐与完整性校验
+```
+
+每个消息流包含独立 `sequence_id`。`header.stamp` 记录采集机墙钟，
+`receive_steady_ns` 记录接收点单调时钟；只有设备提供原始时钟时才填写
+`source_timestamp_ns`，否则为 `0`。因此跨设备对齐以墙钟为公共时间轴，以单调时钟
+检测本机回退和延迟，以序号检测丢帧，不在在线控制线程内等待同步。
+
+控制状态、命令、编码器、触觉和诊断写入 `state/` MCAP bag；左右原始 BGR 图像
+写入 `vision/` MCAP bag。两路 recorder 独立缓存和压缩，视觉吞吐异常不会阻塞
+控制状态记录。
+episode 的 `metadata.json` 在启动/结束时原子更新，退出后生成包含话题频率、时间戳
+回退、序号缺口和文件 SHA-256 的 `manifest.json`。JSONL 只保留为控制调试日志。
 
 ## 8. 明确不在当前边界内的能力
 

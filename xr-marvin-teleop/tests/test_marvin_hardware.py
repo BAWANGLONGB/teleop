@@ -1,10 +1,17 @@
+import json
+import runpy
+import struct
+import threading
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 
+from xr_marvin_teleop.common import episode_validator
 from xr_marvin_teleop.common.marvin_scale_calibration import (
     ArmLengthScaleCalibrator,
     resolve_scale_factor,
@@ -27,6 +34,12 @@ from xr_marvin_teleop.hardware.interface.marvin import (
     MarvinToolConfiguration,
     _modbus_write_single_register_frame,
 )
+from xr_marvin_teleop.hardware.interface.das_finger import (
+    DASFingerAdapter,
+    DASFingerConfiguration,
+    _decode_encoder_value,
+    load_das_finger_configurations,
+)
 from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
     MarvinVendorKinematics,
     VendorIkResult,
@@ -34,6 +47,7 @@ from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
 from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     MarvinHardwareTeleopController,
 )
+from xr_marvin_teleop.ros.pico_client import RosPicoClient
 from xr_marvin_teleop.simulation.marvin_mujoco_adapter import (
     MarvinMujocoAdapter,
 )
@@ -86,8 +100,10 @@ class FakeMarvinRobot:
         self.channel_frames = []
         self.cleared_channels = []
         self.released = False
+        self.connect_calls = 0
 
     def connect(self, _robot_ip_address):
+        self.connect_calls += 1
         return True
 
     def subscribe(self, _dcss_structure):
@@ -150,6 +166,9 @@ class FakeMarvinRobot:
         self.channel_frames.append((arm, bytes(data), channel))
         return size_int
 
+    def set_state(self, arm, state):
+        return True
+
     def release_robot(self):
         self.released = True
 
@@ -161,6 +180,27 @@ class FakeXRClient:
 
     def read_snapshot(self):
         return next(self._snapshots)
+
+    def close(self):
+        self.closed = True
+
+
+class RecordingTelemetry:
+    def __init__(self):
+        self.events = []
+        self.closed = False
+
+    def publish_pico(self, snapshot, **_timestamps):
+        self.events.append(("pico", snapshot.timestamp_ns))
+
+    def publish_marvin_state(self, state, **_timestamps):
+        self.events.append(("marvin", state.frame_serial))
+
+    def publish_joint_command(self, q_rad, **_timestamps):
+        self.events.append(("joint_command", tuple(q_rad)))
+
+    def publish_gripper_command(self, closedness, **_timestamps):
+        self.events.append(("gripper_command", tuple(closedness)))
 
     def close(self):
         self.closed = True
@@ -234,6 +274,26 @@ class FakeMarvinSdkAdapter:
         self.released = True
 
 
+class FakeDasFingerSystem:
+    def __init__(self, encoder_callback, encoder_distance):
+        self.databus = None
+        self._encoder_callback = encoder_callback
+        self._encoder_distance = encoder_distance
+        self._stopped = threading.Event()
+        self.targets = []
+
+    def start(self):
+        self.databus = self
+        self._encoder_callback(struct.pack(">f", self._encoder_distance))
+        self._stopped.wait()
+
+    def set_finger_distance(self, distance):
+        self.targets.append(float(distance))
+
+    def stop(self):
+        self._stopped.set()
+
+
 class FakeMarvinVendorKinematics:
     def __init__(self):
         self.fail_inverse_kinematics = False
@@ -245,7 +305,7 @@ class FakeMarvinVendorKinematics:
 
     def fk_world(self, _arm, q_rad):
         tcp_transform = np.eye(4)
-        tcp_transform[1, 3] = q_rad[0]
+        tcp_transform[0, 3] = q_rad[0]
         return tcp_transform
 
     def ik_world(
@@ -259,7 +319,7 @@ class FakeMarvinVendorKinematics:
         if self.fail_inverse_kinematics:
             return VendorIkResult(False, None, "singular or out of range")
         q_rad = np.asarray(q_ref_rad).copy()
-        q_rad[0] = T_world_tcp_m[1, 3]
+        q_rad[0] = T_world_tcp_m[0, 3]
         return VendorIkResult(True, q_rad, None)
 
 
@@ -301,7 +361,7 @@ class TestMarvinHardware(unittest.TestCase):
     def test_scale_calibration_and_mapping(self):
         calibrator = ArmLengthScaleCalibrator()
         down = {"left": np.zeros(3), "right": np.zeros(3)}
-        delta = np.array([-0.558866, 0.0, 0.664989])
+        delta = np.array([0.0, 0.558866, 0.664989])
         self.assertEqual(
             calibrator.capture(down).status, "down_captured"
         )
@@ -325,6 +385,21 @@ class TestMarvinHardware(unittest.TestCase):
         )
         controller_poses = transform_controller_poses_to_marvin_frame(
             xr_snapshot
+        )
+        rotated_pose = make_openxr_pose()
+        rotated_pose[[3, 6]] = np.sqrt(0.5)
+        rotated_snapshot = XrSnapshot(
+            1,
+            rotated_pose,
+            make_openxr_pose(),
+            (0.0, 0.0),
+            False,
+            False,
+        )
+        np.testing.assert_allclose(
+            transform_controller_poses_to_marvin_frame(rotated_snapshot)[0][1],
+            [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
+            atol=1e-12,
         )
         pose_mapper = XrTargetMapper(0.5)
         current_tcp_transform = np.eye(4)
@@ -350,7 +425,7 @@ class TestMarvinHardware(unittest.TestCase):
             0, controller_poses[0], current_tcp_transform, True
         )
         np.testing.assert_allclose(
-            target_tcp_transform[:3, 3], [0.0, 0.05, 0.0], atol=1e-12
+            target_tcp_transform[:3, 3], [0.05, 0.0, 0.0], atol=1e-12
         )
 
         pose_mapper.map_arm(
@@ -390,7 +465,7 @@ class TestMarvinHardware(unittest.TestCase):
             0, after_regrip_poses[0], new_tcp_transform, True
         )
         np.testing.assert_allclose(
-            after_regrip_target[:3, 3], [1.0, 2.05, 3.0], atol=1e-12
+            after_regrip_target[:3, 3], [1.05, 2.0, 3.0], atol=1e-12
         )
 
         right_tcp_transform = np.eye(4)
@@ -405,7 +480,7 @@ class TestMarvinHardware(unittest.TestCase):
             1, after_regrip_poses[1], right_tcp_transform, True
         )
         np.testing.assert_allclose(
-            right_target[:3, 3], [3.9, 5.0, 6.0], atol=1e-12
+            right_target[:3, 3], [4.0, 5.1, 6.0], atol=1e-12
         )
         np.testing.assert_allclose(
             pose_mapper.map_arm(
@@ -443,7 +518,7 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertEqual(fake_marvin_robot.joint_motion_limits["B"], (80, 70))
         self.assertEqual(fake_marvin_robot.tools["A"][1], [1.0] + [0.0] * 9)
         self.assertEqual(fake_marvin_robot.tools["B"][1], [2.0] + [0.0] * 9)
-        self.assertEqual(fake_marvin_robot.wait_response_calls, 1)
+        self.assertEqual(fake_marvin_robot.wait_response_calls, 0)
         adapter.send_joint_command(np.deg2rad(q_deg))
         np.testing.assert_allclose(
             fake_marvin_robot.q_commands_deg["A"], q_deg[:7]
@@ -494,6 +569,7 @@ class TestMarvinHardware(unittest.TestCase):
             )
 
         adapter = FakeMarvinSdkAdapter()
+        telemetry = RecordingTelemetry()
         controller = MarvinHardwareTeleopController(
             xr_client=FakeXRClient(
                 [
@@ -514,6 +590,7 @@ class TestMarvinHardware(unittest.TestCase):
             control_parameter_settle_seconds=0.0,
             mode_settle_seconds=0.0,
             pd_settle_seconds=0.0,
+            telemetry_publisher=telemetry,
             gripper_control_enabled=True,
             initial_gripper_closedness=(0.5, 0.5),
             gripper_rate=1.0,
@@ -528,6 +605,347 @@ class TestMarvinHardware(unittest.TestCase):
             adapter.gripper_commands[-1], controller.gripper_closedness
         )
         controller.shutdown_hardware()
+        event_names = [name for name, _payload in telemetry.events]
+        self.assertEqual(event_names.count("pico"), 6)
+        self.assertEqual(event_names.count("marvin"), 6)
+        self.assertEqual(event_names.count("joint_command"), 7)
+        self.assertIn("gripper_command", event_names)
+        self.assertTrue(telemetry.closed)
+
+    def test_das_adapter_maps_closedness_and_initializes_from_encoder(self):
+        self.assertAlmostEqual(
+            _decode_encoder_value(struct.pack(">f", 0.05)), 0.05
+        )
+        configurations = (
+            DASFingerConfiguration(
+                "/dev/left",
+                "/dev/video-left",
+                0.01,
+                0.07,
+                startup_distance_m=0.045,
+            ),
+            DASFingerConfiguration(
+                "/dev/right",
+                "/dev/video-right",
+                0.02,
+                0.08,
+                startup_distance_m=0.055,
+                invert=True,
+            ),
+        )
+        systems = []
+
+        factory_arguments = []
+
+        def factory(**kwargs):
+            factory_arguments.append(kwargs)
+            serial_port = kwargs["serial_port"]
+            encoder_distance = 0.04 if serial_port == "/dev/left" else 0.05
+            system = FakeDasFingerSystem(
+                kwargs["encoder_callback"], encoder_distance
+            )
+            systems.append(system)
+            return system
+
+        published_states = []
+        adapter = DASFingerAdapter(
+            configurations,
+            finger_system_factory=factory,
+            command_hz=100.0,
+            ready_timeout_seconds=0.5,
+            state_callback=lambda arm, state: published_states.append((arm, state)),
+        )
+        adapter.connect()
+        self.assertEqual(
+            [item["initial_distance_m"] for item in factory_arguments],
+            [0.045, 0.055],
+        )
+        np.testing.assert_allclose(
+            adapter.get_initial_gripper_closedness(), (0.5, 0.5)
+        )
+        np.testing.assert_allclose(
+            adapter.send_gripper_command((1.0, 0.0)), (0.01, 0.02)
+        )
+        deadline = time.monotonic() + 0.5
+        while not all(
+            system.targets
+            and np.isclose(system.targets[-1], target)
+            for system, target in zip(systems, (0.01, 0.02))
+        ):
+            if time.monotonic() >= deadline:
+                self.fail("DAS command worker did not send a target")
+            time.sleep(0.005)
+        self.assertAlmostEqual(systems[0].targets[-1], 0.01)
+        self.assertAlmostEqual(systems[1].targets[-1], 0.02)
+        state = adapter.get_gripper_state()
+        self.assertEqual(state["encoder_valid"], (True, True))
+        self.assertTrue(all(state["encoder_monotonic_ns"]))
+        self.assertEqual({arm for arm, _state in published_states}, {0, 1})
+        self.assertTrue(all(item["valid"] for _arm, item in published_states))
+        self.assertTrue(adapter.set_idle())
+        adapter.release()
+
+    def test_episode_validator_writes_manifest_for_required_raw_topics(self):
+        topic = lambda count=2: {
+            "count": count,
+            "bag_time_regressions": 0,
+            "source_time_regressions": 0,
+            "sequence_gaps": 0,
+        }
+        statistics = {
+            "/raw/pico/frame": topic(),
+            "/raw/marvin/joint_state": topic(),
+            "/command/marvin/joint_target": topic(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            episode = Path(directory)
+            (episode / "state").mkdir()
+            (episode / "state" / "data.mcap").write_bytes(b"mcap")
+            with patch.object(
+                episode_validator, "inspect_bag", return_value=statistics
+            ):
+                manifest = episode_validator.validate_episode(episode)
+            saved_manifest = json.loads(
+                (episode / "manifest.json").read_text(encoding="utf-8")
+            )
+            (episode / "vision").mkdir()
+            with patch.object(
+                episode_validator,
+                "inspect_bag",
+                side_effect=(statistics, {}),
+            ):
+                missing_vision_manifest = episode_validator.validate_episode(
+                    episode
+                )
+
+        self.assertEqual(manifest["status"], "validated")
+        self.assertEqual(saved_manifest["status"], "validated")
+        self.assertIn("state/data.mcap", manifest["files"])
+        self.assertEqual(missing_vision_manifest["status"], "rejected")
+        self.assertEqual(len(missing_vision_manifest["errors"]), 2)
+
+    def test_ros_pico_client_accepts_source_sequence_restart(self):
+        client = RosPicoClient.__new__(RosPicoClient)
+        client._condition = threading.Condition()
+        client._snapshot = None
+        client._valid = False
+        client._sequence_id = 0
+        client._update_id = 0
+        client._receive_steady_ns = 0
+
+        def message(sequence_id, timestamp_ns):
+            return SimpleNamespace(
+                sequence_id=sequence_id,
+                source_timestamp_ns=timestamp_ns,
+                valid=True,
+                left_controller_pose=make_openxr_pose(),
+                right_controller_pose=make_openxr_pose(),
+                grip_values=(0.0, 0.0),
+                trigger_values=(0.0, 0.0),
+                thumbstick_y_values=(0.0, 0.0),
+                button_a=False,
+                button_b=False,
+            )
+
+        client._callback(message(10, 100))
+        client._callback(message(10, 100))
+        client._callback(message(1, 200))
+
+        self.assertEqual(client._sequence_id, 1)
+        self.assertEqual(client._update_id, 2)
+        self.assertEqual(client._snapshot.timestamp_ns, 200)
+
+    def test_das_calibration_sentinel_recovers_or_names_stuck_side(self):
+        configurations = tuple(
+            DASFingerConfiguration(
+                f"/dev/{side}",
+                f"/dev/video-{side}",
+                0.01,
+                0.07,
+                startup_distance_m=0.05,
+            )
+            for side in ("left", "right")
+        )
+
+        class CalibrationSystem(FakeDasFingerSystem):
+            def __init__(self, callback, recover):
+                super().__init__(callback, -66.66)
+                self.recover = recover
+
+            def set_finger_distance(self, distance):
+                super().set_finger_distance(distance)
+                if self.recover:
+                    self.recover = False
+                    self._encoder_callback(struct.pack(">f", 0.05))
+
+        recovering = DASFingerAdapter(
+            configurations,
+            finger_system_factory=lambda **kwargs: CalibrationSystem(
+                kwargs["encoder_callback"], True
+            ),
+            ready_timeout_seconds=0.2,
+        )
+        recovering.connect()
+        recovering.release()
+
+        def stuck_factory(**kwargs):
+            recover = kwargs["serial_port"].endswith("right")
+            return CalibrationSystem(kwargs["encoder_callback"], recover)
+
+        stuck = DASFingerAdapter(
+            configurations,
+            finger_system_factory=stuck_factory,
+            ready_timeout_seconds=0.05,
+        )
+        with self.assertRaisesRegex(TimeoutError, "left.*-66.66"):
+            stuck.connect()
+
+    def test_das_config_loader_requires_both_arms(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "das.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "left": {
+                            "serial_port": "/dev/left",
+                            "camera_device": "/dev/video-left",
+                            "closed_distance_m": 0.01,
+                            "open_distance_m": 0.07,
+                        },
+                        "right": {
+                            "serial_port": "/dev/right",
+                            "camera_device": "/dev/video-right",
+                            "closed_distance_m": 0.01,
+                            "open_distance_m": 0.07,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            configurations = load_das_finger_configurations(config_path)
+            self.assertEqual(configurations[0].serial_port, "/dev/left")
+            self.assertEqual(configurations[1].open_distance_m, 0.07)
+
+    def test_marvin_adapter_delegates_gripper_lifecycle_to_das(self):
+        class RecordingGripper:
+            def __init__(self):
+                self.events = []
+
+            def connect(self):
+                self.events.append("connect")
+
+            def send_gripper_command(self, closedness):
+                self.events.append(("command", tuple(closedness)))
+                return "das-targets"
+
+            def get_initial_gripper_closedness(self):
+                return (0.25, 0.75)
+
+            def get_gripper_state(self):
+                return {"encoder_valid": (True, True)}
+
+            def set_idle(self):
+                self.events.append("idle")
+                return True
+
+            def release(self):
+                self.events.append("release")
+
+        gripper = RecordingGripper()
+        robot = FakeMarvinRobot()
+        adapter = MarvinSdkAdapter(
+            marvin_robot=robot,
+            dcss_structure=object(),
+            gripper_adapter=gripper,
+        )
+        adapter.connect()
+        self.assertEqual(adapter.get_initial_gripper_closedness(), (0.25, 0.75))
+        self.assertEqual(adapter.get_gripper_state(), {"encoder_valid": (True, True)})
+        self.assertEqual(adapter.send_gripper_command((0.2, 0.3)), "das-targets")
+        adapter.set_idle()
+        adapter.release()
+        self.assertEqual(
+            gripper.events,
+            ["connect", ("command", (0.2, 0.3)), "idle", "release"],
+        )
+
+    def test_das_preflight_failure_does_not_connect_marvin(self):
+        class FailingGripper:
+            def send_gripper_command(self, _closedness):
+                pass
+
+            def connect(self):
+                raise RuntimeError("encoder unavailable")
+
+            def release(self):
+                self.released = True
+
+        gripper = FailingGripper()
+        gripper.released = False
+        robot = FakeMarvinRobot()
+        adapter = MarvinSdkAdapter(
+            marvin_robot=robot,
+            dcss_structure=object(),
+            gripper_adapter=gripper,
+        )
+        with self.assertRaisesRegex(RuntimeError, "encoder unavailable"):
+            adapter.connect()
+        self.assertEqual(robot.connect_calls, 0)
+        self.assertTrue(gripper.released)
+
+    def test_hardware_cli_does_not_enable_das_by_default(self):
+        entry_path = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "hardware"
+            / "teleop_marvin_hardware.py"
+        )
+        arguments, _parser = runpy.run_path(str(entry_path))[
+            "parse_command_line_arguments"
+        ]([])
+        self.assertIsNone(arguments.das_gripper_config)
+        self.assertIsNone(arguments.das_sdk_root)
+
+    def test_collection_supervisor_builds_safe_job_and_shutdown_order(self):
+        entry_path = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "data"
+            / "run_collection.py"
+        )
+        namespace = runpy.run_path(str(entry_path))
+        arguments = namespace["parse_command_line_arguments"](
+            [
+                "--task",
+                "pick",
+                "--robot-model",
+                "M6S",
+                "--enable-hardware",
+                "--confirmed-estop",
+                "--confirmed-joint-mapping",
+                "--das-config",
+                "das.json",
+                "--das-sdk-root",
+                "das-sdk",
+            ]
+        )
+        commands = namespace["_build_commands"](arguments)
+        self.assertIn("--pico-from-ros2", commands["hardware"])
+        self.assertIn("--ros2", commands["hardware"])
+        self.assertIn("--calibration", commands["recorder"])
+
+        calls = []
+        results = namespace["_shutdown_processes"](
+            {"pico": object(), "recorder": object(), "hardware": object()},
+            stop_process=lambda process, name, timeout: (
+                calls.append((name, timeout)) or 0
+            ),
+        )
+        self.assertEqual(
+            calls,
+            [("hardware", 15.0), ("recorder", None), ("pico", 10.0)],
+        )
+        self.assertEqual(results, {"hardware": 0, "recorder": 0, "pico": 0})
 
     def test_optional_ik_nsp_is_initialized_and_angle_is_ramped(self):
         def snapshot(timestamp, grip_values):
@@ -607,7 +1025,6 @@ class TestMarvinHardware(unittest.TestCase):
         controller.prepare_hardware()
         controller.execute_control_cycle(0.0)
         controller.execute_control_cycle(0.02)
-        controller.execute_control_cycle(0.04)
         self.assertAlmostEqual(kinematics.nsp_angles_deg[-2], -0.4)
         self.assertAlmostEqual(kinematics.nsp_angles_deg[-1], 0.4)
         controller.shutdown_hardware()
@@ -741,7 +1158,7 @@ class TestMarvinHardware(unittest.TestCase):
             session_records[-1]["q_command_rad"], repeated_targets_rad[-1]
         )
 
-        expected_tcp_delta_m = np.array([0.0, 0.02, 0.0])
+        expected_tcp_delta_m = np.array([0.02, 0.0, 0.0])
         maximum_position_error_mm = 0.0
         maximum_rotation_error_deg = 0.0
         for arm_index in (0, 1):
@@ -1019,7 +1436,7 @@ class TestMarvinHardware(unittest.TestCase):
                     "send_joint_command",
                 ],
             )
-            self.assertEqual(adapter.pd_period_milliseconds, 5)
+            self.assertEqual(adapter.pd_period_milliseconds, 20)
             startup_hold_q_rad = controller.execute_control_cycle(0.0)
             np.testing.assert_allclose(startup_hold_q_rad, 0.0)
             controller.execute_control_cycle(0.1)
@@ -1141,6 +1558,16 @@ class TestMarvinHardware(unittest.TestCase):
                 adapter.read_state(),
                 np.zeros(14),
                 1.0,
+                gripper_state={
+                    "distance_m": (0.04, 0.05),
+                    "target_distance_m": (0.045, 0.055),
+                    "encoder_monotonic_ns": (101, 102),
+                    "encoder_wall_time_ns": (201, 202),
+                    "encoder_valid": (True, True),
+                },
+                sample_id=7,
+                sample_monotonic_ns=100,
+                wall_time_ns=200,
             )
             logger.close()
             record = read_marvin_session(logger.path)[0]
@@ -1148,6 +1575,11 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertFalse(record["xr_frame_valid"])
         self.assertIsNone(record["xr_timestamp_ns"])
         self.assertIsNone(record["left_controller_pose"])
+        self.assertEqual(record["schema_version"], 2)
+        self.assertEqual(record["sample_id"], 7)
+        self.assertEqual(record["monotonic_time_ns"], 100)
+        self.assertEqual(record["wall_time_ns"], 200)
+        self.assertEqual(record["gripper_feedback_distance_m"], [0.04, 0.05])
 
     def test_teleoperation_rejects_stale_robot_feedback(self):
         snapshot = XrSnapshot(

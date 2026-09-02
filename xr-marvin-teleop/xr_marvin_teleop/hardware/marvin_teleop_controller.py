@@ -55,6 +55,7 @@ class MarvinHardwareTeleopController:
         mode_settle_seconds=1.0,
         pd_settle_seconds=1.0,
         session_logger=None,
+        telemetry_publisher=None,
         gripper_control_enabled=False,
         initial_gripper_closedness=(0.0, 0.0),
         gripper_rate=DEFAULT_GRIPPER_RATE,
@@ -209,6 +210,8 @@ class MarvinHardwareTeleopController:
         self.mode_settle_seconds = float(mode_settle_seconds)
         self.pd_settle_seconds = float(pd_settle_seconds)
         self.session_logger = session_logger
+        self.telemetry_publisher = telemetry_publisher
+        self._sample_id = 0
         self.gripper_control_enabled = bool(gripper_control_enabled)
         self.gripper_rate = gripper_rate
         self.gripper_command_period_seconds = 1.0 / gripper_command_hz
@@ -225,7 +228,7 @@ class MarvinHardwareTeleopController:
         self.nsp_lateral_signs = nsp_lateral_signs.copy()
         self._nsp_current_angles_deg = np.zeros(2)
         self._nsp_target_angles_deg = nsp_angles_deg.copy()
-        self._nsp_lateral_anchor_y = [None, None]
+        self._nsp_lateral_anchors = [None, None]
         self._last_nsp_update_time = None
         self._gripper_closedness = initial_gripper_closedness.copy()
         self._last_sent_gripper_closedness = initial_gripper_closedness.copy()
@@ -325,6 +328,25 @@ class MarvinHardwareTeleopController:
             )
 
         self.adapter.connect()
+        if self.gripper_control_enabled:
+            initial_gripper_getter = getattr(
+                self.adapter, "get_initial_gripper_closedness", None
+            )
+            if callable(initial_gripper_getter):
+                measured_closedness = np.asarray(
+                    initial_gripper_getter(), dtype=float
+                ).reshape(-1)
+                if (
+                    measured_closedness.shape != (2,)
+                    or not np.all(np.isfinite(measured_closedness))
+                    or np.any(measured_closedness < 0.0)
+                    or np.any(measured_closedness > 1.0)
+                ):
+                    raise RuntimeError(
+                        "gripper adapter returned invalid initial closedness"
+                    )
+                self._gripper_closedness[:] = measured_closedness
+                self._last_sent_gripper_closedness[:] = measured_closedness
         actual_sdk_version = self.adapter.sdk_version()
         if (
             self.expected_sdk_version is not None
@@ -381,7 +403,7 @@ class MarvinHardwareTeleopController:
             required_updates=1,
         )
         self._require_healthy_feedback(robot_feedback, True)
-        self.adapter.send_joint_command(startup_q_rad, wait_response=True)
+        self._send_joint_command(startup_q_rad, wait_response=True)
         self._last_feedback_frame_serial = robot_feedback.frame_serial
         self._stale_feedback_cycle_counts = [0, 0]
         self._previous_button_a = startup_xr_snapshot.button_a
@@ -592,7 +614,16 @@ class MarvinHardwareTeleopController:
             )
         ) < 0.01:
             return
-        self.adapter.send_gripper_command(tuple(self._gripper_closedness))
+        closedness = tuple(self._gripper_closedness)
+        wall_time_ns = time.time_ns()
+        steady_ns = time.monotonic_ns()
+        self.adapter.send_gripper_command(closedness)
+        self._publish_telemetry(
+            "publish_gripper_command",
+            closedness,
+            wall_time_ns=wall_time_ns,
+            steady_ns=steady_ns,
+        )
         self._last_sent_gripper_closedness = self._gripper_closedness.copy()
         self._last_gripper_command_time = cycle_time_seconds
 
@@ -628,16 +659,16 @@ class MarvinHardwareTeleopController:
             return
         for arm_index, is_grip_active in enumerate(grip_states):
             if not is_grip_active:
-                self._nsp_lateral_anchor_y[arm_index] = None
+                self._nsp_lateral_anchors[arm_index] = None
                 self._nsp_target_angles_deg[arm_index] = 0.0
                 continue
-            y_position = float(controller_poses_marvin[arm_index][0][1])
-            anchor_y = self._nsp_lateral_anchor_y[arm_index]
-            if anchor_y is None:
-                self._nsp_lateral_anchor_y[arm_index] = y_position
+            lateral_position = float(controller_poses_marvin[arm_index][0][0])
+            anchor = self._nsp_lateral_anchors[arm_index]
+            if anchor is None:
+                self._nsp_lateral_anchors[arm_index] = lateral_position
                 self._nsp_target_angles_deg[arm_index] = 0.0
                 continue
-            displacement = y_position - anchor_y
+            displacement = lateral_position - anchor
             magnitude = abs(displacement)
             if magnitude <= self.nsp_lateral_deadzone_m:
                 normalized_displacement = 0.0
@@ -656,13 +687,65 @@ class MarvinHardwareTeleopController:
                 * normalized_displacement
             )
 
+    def _publish_telemetry(self, method_name, *arguments, **keywords):
+        if self.telemetry_publisher is None:
+            return
+        method = getattr(self.telemetry_publisher, method_name, None)
+        if callable(method):
+            method(*arguments, **keywords)
+
+    def _send_joint_command(self, q_rad, wait_response=False):
+        wall_time_ns = time.time_ns()
+        steady_ns = time.monotonic_ns()
+        self.adapter.send_joint_command(q_rad, wait_response=wait_response)
+        self._publish_telemetry(
+            "publish_joint_command",
+            q_rad,
+            wall_time_ns=wall_time_ns,
+            steady_ns=steady_ns,
+        )
+
+    def _record_control_sample(self, xr_snapshot, robot_feedback, q_command_rad):
+        gripper_state_getter = getattr(self.adapter, "get_gripper_state", None)
+        gripper_state = (
+            None if gripper_state_getter is None else gripper_state_getter()
+        )
+        self._sample_id += 1
+        sample_monotonic_ns = time.monotonic_ns()
+        wall_time_ns = time.time_ns()
+        if self.session_logger is not None:
+            self.session_logger.record_control_cycle(
+                xr_snapshot,
+                robot_feedback,
+                q_command_rad,
+                self.scale_factor,
+                self.gripper_closedness,
+                gripper_state=gripper_state,
+                sample_id=self._sample_id,
+                sample_monotonic_ns=sample_monotonic_ns,
+                wall_time_ns=wall_time_ns,
+            )
+
     def execute_control_cycle(self, cycle_time_seconds=None):
         if not self._hardware_prepared:
             raise RuntimeError("prepare_hardware() must run before control cycles")
         if cycle_time_seconds is None:
             cycle_time_seconds = time.monotonic()
         xr_snapshot = self.xr_client.read_snapshot()
+        if not getattr(self.xr_client, "is_ros_source", False):
+            self._publish_telemetry(
+                "publish_pico",
+                xr_snapshot,
+                wall_time_ns=time.time_ns(),
+                steady_ns=time.monotonic_ns(),
+            )
         robot_feedback = self.adapter.read_state()
+        self._publish_telemetry(
+            "publish_marvin_state",
+            robot_feedback,
+            wall_time_ns=time.time_ns(),
+            steady_ns=time.monotonic_ns(),
+        )
         self._require_healthy_feedback(robot_feedback, True)
         self._require_advancing_feedback(robot_feedback)
         if xr_snapshot is None:
@@ -677,18 +760,11 @@ class MarvinHardwareTeleopController:
             self._nsp_target_angles_deg[:] = (
                 0.0 if self.nsp_lateral_enabled else self.nsp_angles_deg
             )
-            self._nsp_lateral_anchor_y = [None, None]
+            self._nsp_lateral_anchors = [None, None]
             self._last_nsp_update_time = None
             q_command_rad = self._last_commanded_q_rad.copy()
-            self.adapter.send_joint_command(q_command_rad)
-            if self.session_logger is not None:
-                self.session_logger.record_control_cycle(
-                    None,
-                    robot_feedback,
-                    q_command_rad,
-                    self.scale_factor,
-                    self.gripper_closedness,
-                )
+            self._send_joint_command(q_command_rad)
+            self._record_control_sample(None, robot_feedback, q_command_rad)
             return q_command_rad
         if not self._xr_frame_available:
             print("PICO XR stream recovered; Grip origins will be re-anchored.")
@@ -696,16 +772,9 @@ class MarvinHardwareTeleopController:
         q_command_rad = self._compute_q_command(
             xr_snapshot, robot_feedback, float(cycle_time_seconds)
         )
-        self.adapter.send_joint_command(q_command_rad)
+        self._send_joint_command(q_command_rad)
         self._update_gripper_command(xr_snapshot, float(cycle_time_seconds))
-        if self.session_logger is not None:
-            self.session_logger.record_control_cycle(
-                xr_snapshot,
-                robot_feedback,
-                q_command_rad,
-                self.scale_factor,
-                self.gripper_closedness,
-            )
+        self._record_control_sample(xr_snapshot, robot_feedback, q_command_rad)
         return q_command_rad
 
     def shutdown_hardware(self):
@@ -725,9 +794,15 @@ class MarvinHardwareTeleopController:
                 print(f"Marvin shutdown warning: {error}")
         finally:
             self.adapter.release()
-            self.xr_client.close()
-            if self.session_logger is not None:
-                self.session_logger.close()
+            try:
+                if self.telemetry_publisher is not None:
+                    self.telemetry_publisher.close()
+            finally:
+                try:
+                    self.xr_client.close()
+                finally:
+                    if self.session_logger is not None:
+                        self.session_logger.close()
             self._hardware_prepared = False
 
     def run(self, maximum_cycles=None):

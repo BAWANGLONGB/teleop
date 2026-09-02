@@ -1,0 +1,30 @@
+/raw/pico/frame:
+  history: keep_last
+  depth: 10
+  reliability: best_effort
+  durability: volatile
+/raw/das/left/tactile:
+  history: keep_last
+  depth: 10
+  reliability: best_effort
+  durability: volatile
+/raw/das/right/tactile:
+  history: keep_last
+  depth: 10
+  reliability: best_effort
+  durability: volatile
+/raw/das/left/image:
+  history: keep_last
+  depth: 5
+  reliability: best_effort
+  durability: volatile
+/raw/das/right/image:
+  history: keep_last
+  depth: 5
+  reliability: best_effort
+  durability: volatile
+/episode/state:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local

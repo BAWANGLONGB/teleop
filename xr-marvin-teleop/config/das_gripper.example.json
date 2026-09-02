@@ -1,0 +1,24 @@
+{
+  "left": {
+    "serial_port": "/dev/ttyFingerLeft",
+    "camera_device": "/dev/finger_camera_left",
+    "closed_distance_m": 0.015,
+    "open_distance_m": 0.150,
+    "startup_distance_m": 0.050,
+    "invert": false,
+    "tactile_hz": 30,
+    "camera_fps": 60,
+    "camera_resolution": "640x480"
+  },
+  "right": {
+    "serial_port": "/dev/ttyFingerRight",
+    "camera_device": "/dev/finger_camera_right",
+    "closed_distance_m": 0.015,
+    "open_distance_m": 0.150,
+    "startup_distance_m": 0.050,
+    "invert": false,
+    "tactile_hz": 30,
+    "camera_fps": 60,
+    "camera_resolution": "640x480"
+  }
+}
