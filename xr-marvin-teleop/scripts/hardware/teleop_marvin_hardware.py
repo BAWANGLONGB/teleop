@@ -32,6 +32,7 @@ from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     MarvinHardwareTeleopController,
 )
 from xr_marvin_teleop.ros.telemetry_bridge import Ros2TelemetryBridge
+from xr_marvin_teleop.ros.das_client import RosDasClient
 from xr_marvin_teleop.ros.pico_client import RosPicoClient
 
 
@@ -73,6 +74,11 @@ def parse_command_line_arguments(arguments=None):
         type=Path,
         default=None,
         help="root of the gen_finger_con_python_sdk_release checkout",
+    )
+    parser.add_argument(
+        "--das-from-ros2",
+        action="store_true",
+        help="subscribe to an independent DAS source instead of opening its SDK",
     )
     parser.add_argument(
         "--das-command-hz", type=float, default=50.0
@@ -201,8 +207,14 @@ def main():
         parser.error(
             "--gripper-config and --das-gripper-config are mutually exclusive"
         )
-    if arguments.das_gripper_config is not None and arguments.das_sdk_root is None:
+    if (
+        arguments.das_gripper_config is not None
+        and not arguments.das_from_ros2
+        and arguments.das_sdk_root is None
+    ):
         parser.error("--das-sdk-root is required with --das-gripper-config")
+    if arguments.das_from_ros2 and arguments.das_gripper_config is None:
+        parser.error("--das-from-ros2 requires --das-gripper-config")
     if arguments.ros2 and not arguments.pico_from_ros2:
         parser.error(
             "--ros2 collection requires the independent PICO source: "
@@ -241,7 +253,9 @@ def main():
             else load_modbus_gripper_configurations(arguments.gripper_config)
         )
         telemetry_bridge = (
-            Ros2TelemetryBridge()
+            Ros2TelemetryBridge(
+                publish_gripper_commands=not arguments.das_from_ros2
+            )
             if arguments.ros2
             else None
         )
@@ -250,27 +264,33 @@ def main():
             das_gripper_configurations = load_das_finger_configurations(
                 arguments.das_gripper_config
             )
-            das_gripper_adapter = DASFingerAdapter(
-                das_gripper_configurations,
-                sdk_root_path=arguments.das_sdk_root,
-                command_hz=arguments.das_command_hz,
-                ready_timeout_seconds=arguments.das_ready_timeout,
-                state_callback=(
-                    None
-                    if telemetry_bridge is None
-                    else telemetry_bridge.publish_das_state
-                ),
-                tactile_callback=(
-                    None
-                    if telemetry_bridge is None
-                    else telemetry_bridge.publish_tactile
-                ),
-                frame_callback=(
-                    None
-                    if telemetry_bridge is None
-                    else telemetry_bridge.publish_camera
-                ),
-            )
+            if arguments.das_from_ros2:
+                das_gripper_adapter = RosDasClient(
+                    das_gripper_configurations,
+                    ready_timeout_seconds=arguments.das_ready_timeout,
+                )
+            else:
+                das_gripper_adapter = DASFingerAdapter(
+                    das_gripper_configurations,
+                    sdk_root_path=arguments.das_sdk_root,
+                    command_hz=arguments.das_command_hz,
+                    ready_timeout_seconds=arguments.das_ready_timeout,
+                    state_callback=(
+                        None
+                        if telemetry_bridge is None
+                        else telemetry_bridge.publish_das_state
+                    ),
+                    tactile_callback=(
+                        None
+                        if telemetry_bridge is None
+                        else telemetry_bridge.publish_tactile
+                    ),
+                    frame_callback=(
+                        None
+                        if telemetry_bridge is None
+                        else telemetry_bridge.publish_camera
+                    ),
+                )
         for arm_index, tool_configuration in enumerate(active_tool_configurations):
             marvin_kinematics.set_tool(
                 arm_index, tool_configuration.kinematics_mm_deg

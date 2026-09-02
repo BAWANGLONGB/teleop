@@ -166,9 +166,9 @@ Trigger 或摇杆后拉闭合，摇杆前推张开，输入释放后保持。
 
 ### ROS2 数据采集（可选）
 
-ROS2 是采集数据总线，也是 PICO 与控制任务之间的边界。PICO SDK 由独立进程独占，
-实机控制订阅 PICO，并异步发布 Marvin、DAS 和实际下发命令；录制背压不会进入控制
-线程。先安装 MCAP 后端、构建消息包并 source：
+ROS2 是采集数据总线，也是 PICO、DAS 与控制任务之间的边界。PICO SDK 和 DAS
+SDK/双目相机分别由独立进程持有；Marvin 控制进程只订阅输入、下发关节命令和夹爪
+ROS2 命令，录制与图像处理不会进入控制进程。先安装 MCAP 后端、构建消息包并 source：
 
 ```bash
 sudo apt-get install ros-humble-rosbag2-storage-mcap
@@ -187,8 +187,8 @@ cd ..
 unset LD_PRELOAD
 ```
 
-推荐使用 supervisor 一条命令启动 PICO、recorder 和硬件控制，并在退出时按安全顺序
-收尾：
+推荐使用 supervisor 一条命令启动 PICO、DAS、recorder 和 Marvin 控制，并在退出时
+按安全顺序收尾：
 
 ```bash
 python scripts/data/run_collection.py \
@@ -202,16 +202,25 @@ python scripts/data/run_collection.py \
   --das-sdk-root /home/zxcx/TeleOp/gen_finger_con_python_sdk_release
 ```
 
-它会等待有效 PICO 帧后启动 recorder，再使能 Marvin；按一次 `Ctrl+C` 后依次停止
-硬件、完成 MCAP/manifest、停止 PICO。Pico PC Service 仍需提前独立启动。完整 SOP 见
-[日常操作说明](docs/操作指南.md)。如需分进程排障，按以下顺序开三个终端。终端 1
-发布 PICO 原始输入：
+它会依次等待有效 PICO 帧和 DAS 编码器反馈，再启动 recorder 和 Marvin；并固定
+Marvin、PICO、DAS、recorder 的 CPU 亲和性，将 recorder 设为 `nice +10`。按一次
+`Ctrl+C` 后依次停止 Marvin、DAS、完成 MCAP/manifest、停止 PICO。Pico PC Service
+仍需提前独立启动。完整 SOP 见[日常操作说明](docs/操作指南.md)。如需分进程排障，
+按以下顺序启动。先发布 PICO：
 
 ```bash
 python scripts/data/publish_pico.py
 ```
 
-终端 2 创建 episode，并把状态/触觉和原始图像分别写入两个 MCAP：
+再启动独立 DAS 数据源：
+
+```bash
+python scripts/data/publish_das.py \
+  --config config/das_gripper.example.json \
+  --sdk-root /home/zxcx/TeleOp/gen_finger_con_python_sdk_release
+```
+
+随后创建 episode，并把状态/触觉和原始图像分别写入两个 MCAP：
 
 ```bash
 python scripts/data/record_episode.py \
@@ -221,10 +230,10 @@ python scripts/data/record_episode.py \
   --calibration config/das_gripper.example.json
 ```
 
-终端 3 启动实机，硬件确认参数保持不变，并追加：
+最后启动实机，硬件确认参数保持不变，并追加：
 
 ```text
---ros2 --pico-from-ros2
+--ros2 --pico-from-ros2 --das-from-ros2
 ```
 
 主要话题如下；每个流独立编号，不再生成中心化 `/teleop/sample`：

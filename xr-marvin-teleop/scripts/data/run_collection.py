@@ -17,10 +17,17 @@ from pathlib import Path
 from xr_marvin_teleop.hardware.interface.das_finger import (
     load_das_finger_configurations,
 )
+from xr_marvin_teleop.ros.das_client import RosDasClient
 from xr_marvin_teleop.ros.pico_client import RosPicoClient
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROCESS_CPUS = {
+    "hardware": (2, 3, 18, 19),
+    "pico": (4, 20),
+    "das": (5, 6, 21, 22),
+    "recorder": (*range(7, 16), *range(23, 32)),
+}
 
 
 def parse_command_line_arguments(arguments=None):
@@ -215,8 +222,7 @@ def _build_commands(arguments):
         arguments.robot_ip,
         "--das-gripper-config",
         str(arguments.das_config),
-        "--das-sdk-root",
-        str(arguments.das_sdk_root),
+        "--das-from-ros2",
         "--scale-calibration-path",
         str(arguments.scale_calibration_path),
         "--thumbstick-y-sign",
@@ -250,19 +256,63 @@ def _build_commands(arguments):
         "--poll-hz",
         str(arguments.pico_poll_hz),
     ]
-    return {"pico": pico, "recorder": recorder, "hardware": hardware}
+    das = [
+        python,
+        str(PROJECT_ROOT / "scripts" / "data" / "publish_das.py"),
+        "--config",
+        str(arguments.das_config),
+        "--sdk-root",
+        str(arguments.das_sdk_root),
+        "--ready-timeout",
+        str(arguments.startup_timeout),
+    ]
+    return {
+        "pico": pico,
+        "das": das,
+        "recorder": recorder,
+        "hardware": hardware,
+    }
 
 
-def _start_process(name, command):
+def _start_process(name, command, cpus, nice=0):
     print(f"Starting {name}: {shlex.join(command)}", flush=True)
     environment = os.environ.copy()
     environment["PYTHONUNBUFFERED"] = "1"
-    return subprocess.Popen(
+    process = subprocess.Popen(
         command,
         cwd=PROJECT_ROOT,
         env=environment,
         start_new_session=True,
     )
+    try:
+        os.sched_setaffinity(process.pid, cpus)
+        if nice:
+            os.setpriority(os.PRIO_PROCESS, process.pid, nice)
+    except Exception:
+        _signal_process(process, signal.SIGTERM)
+        process.wait(timeout=5.0)
+        raise
+    print(
+        f"{name} scheduling: CPUs {','.join(map(str, cpus))}, nice {nice:+d}",
+        flush=True,
+    )
+    return process
+
+
+def _validated_cpu_sets():
+    available = set(os.sched_getaffinity(0))
+    missing = {
+        name: sorted(set(cpus) - available)
+        for name, cpus in PROCESS_CPUS.items()
+        if not set(cpus).issubset(available)
+    }
+    if missing:
+        details = "; ".join(
+            f"{name}: {','.join(map(str, cpus))}"
+            for name, cpus in missing.items()
+        )
+        raise RuntimeError(f"planned CPU affinity is unavailable ({details})")
+    return PROCESS_CPUS
 
 
 def _wait_for_pico(process, timeout_seconds):
@@ -285,6 +335,33 @@ def _wait_for_pico(process, timeout_seconds):
             )
             return
     raise TimeoutError("PICO produced no valid ROS2 frame before startup timeout")
+
+
+def _wait_for_das(process, configuration_path, timeout_seconds):
+    deadline = time.monotonic() + timeout_seconds
+    configurations = load_das_finger_configurations(configuration_path)
+    with closing(
+        RosDasClient(configurations, ready_timeout_seconds=timeout_seconds)
+    ) as client:
+        while time.monotonic() < deadline:
+            return_code = process.poll()
+            if return_code is not None:
+                raise RuntimeError(
+                    f"DAS source exited during startup with code {return_code}"
+                )
+            try:
+                client.connect(
+                    timeout_seconds=min(0.5, deadline - time.monotonic())
+                )
+            except TimeoutError:
+                continue
+            print(
+                f"DAS ready; encoder distances: "
+                f"{client.get_encoder_distances()}",
+                flush=True,
+            )
+            return
+    raise TimeoutError("DAS produced no valid ROS2 state before startup timeout")
 
 
 def _require_running(process, name, seconds=2.0):
@@ -330,6 +407,7 @@ def _shutdown_processes(processes, stop_process=_stop_process):
     results = {}
     for name, timeout_seconds in (
         ("hardware", 15.0),
+        ("das", 10.0),
         ("recorder", None),
         ("pico", 10.0),
     ):
@@ -341,7 +419,7 @@ def _shutdown_processes(processes, stop_process=_stop_process):
 
 def _monitor(processes, stop_requested):
     while not stop_requested.is_set():
-        for name in ("hardware", "recorder", "pico"):
+        for name in ("hardware", "das", "recorder", "pico"):
             return_code = processes[name].poll()
             if return_code is not None:
                 print(f"{name} exited with code {return_code}", flush=True)
@@ -355,6 +433,7 @@ def main(arguments=None):
     try:
         _preflight(parsed)
         commands = _build_commands(parsed)
+        cpu_sets = _validated_cpu_sets()
     except Exception as error:
         print(f"Collection preflight failed: {error}", file=sys.stderr, flush=True)
         return 1
@@ -373,20 +452,33 @@ def main(arguments=None):
             previous_handlers[signal_number] = signal.signal(
                 signal_number, request_stop
             )
-        processes["pico"] = _start_process("PICO publisher", commands["pico"])
+        processes["pico"] = _start_process(
+            "PICO publisher", commands["pico"], cpu_sets["pico"]
+        )
         _wait_for_pico(processes["pico"], parsed.startup_timeout)
+        processes["das"] = _start_process(
+            "DAS source", commands["das"], cpu_sets["das"]
+        )
+        _wait_for_das(
+            processes["das"], parsed.das_config, parsed.startup_timeout
+        )
         processes["recorder"] = _start_process(
-            "episode recorder", commands["recorder"]
+            "episode recorder",
+            commands["recorder"],
+            cpu_sets["recorder"],
+            nice=10,
         )
         _require_running(processes["recorder"], "episode recorder")
         if processes["pico"].poll() is not None:
             raise RuntimeError("PICO publisher stopped before hardware startup")
+        if processes["das"].poll() is not None:
+            raise RuntimeError("DAS source stopped before hardware startup")
         processes["hardware"] = _start_process(
-            "Marvin hardware", commands["hardware"]
+            "Marvin hardware", commands["hardware"], cpu_sets["hardware"]
         )
         print("Collection active; press Ctrl-C once to stop safely", flush=True)
         exited_name, return_code = _monitor(processes, stop_requested)
-        if exited_name == "pico":
+        if exited_name in ("pico", "das"):
             exit_code = return_code or 1
         else:
             exit_code = 0 if return_code == 0 else 1

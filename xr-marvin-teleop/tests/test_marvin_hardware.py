@@ -1,4 +1,5 @@
 import json
+import queue
 import runpy
 import struct
 import threading
@@ -47,7 +48,9 @@ from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
 from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     MarvinHardwareTeleopController,
 )
+from xr_marvin_teleop.ros.das_client import RosDasClient
 from xr_marvin_teleop.ros.pico_client import RosPicoClient
+from xr_marvin_teleop.ros.telemetry_bridge import Ros2DataBridge
 from xr_marvin_teleop.simulation.marvin_mujoco_adapter import (
     MarvinMujocoAdapter,
 )
@@ -755,6 +758,103 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertEqual(client._update_id, 2)
         self.assertEqual(client._snapshot.timestamp_ns, 200)
 
+    def test_ros_das_client_maps_feedback_and_publishes_commands(self):
+        configurations = (
+            DASFingerConfiguration("/dev/left", "/dev/video-left", 0.01, 0.07),
+            DASFingerConfiguration(
+                "/dev/right", "/dev/video-right", 0.01, 0.07, invert=True
+            ),
+        )
+        client = RosDasClient.__new__(RosDasClient)
+        client.configurations = configurations
+        client.encoder_stale_timeout_seconds = 0.5
+        client._condition = threading.Condition()
+        client._distances = [float("nan"), float("nan")]
+        client._targets = [0.05, 0.05]
+        client._encoder_monotonic_ns = [0, 0]
+        client._encoder_wall_time_ns = [0, 0]
+        client._valid = [False, False]
+        client._status_flags = [0, 0]
+        client._sequence_ids = [0, 0]
+        client._update_ids = [0, 0]
+        client._command_sequence = 0
+        client._is_connected = True
+
+        now_ns = time.monotonic_ns()
+
+        def state(side, distance):
+            return SimpleNamespace(
+                side=side,
+                sequence_id=1,
+                distance_m=distance,
+                target_distance_m=0.05,
+                receive_steady_ns=now_ns,
+                status_flags=0,
+                valid=True,
+                header=SimpleNamespace(
+                    stamp=SimpleNamespace(sec=123, nanosec=456)
+                ),
+            )
+
+        client._callback(state("left", 0.055))
+        client._callback(state("right", 0.055))
+
+        class Command:
+            def __init__(self):
+                self.header = SimpleNamespace(
+                    stamp=SimpleNamespace(sec=0, nanosec=0), frame_id=""
+                )
+
+        published = []
+        client._message_type = Command
+        client._publisher = SimpleNamespace(publish=published.append)
+
+        np.testing.assert_allclose(
+            client.get_initial_gripper_closedness(), (0.25, 0.75)
+        )
+        np.testing.assert_allclose(
+            client.send_gripper_command((0.2, 0.3)), (0.058, 0.028)
+        )
+        self.assertEqual(published[0].closedness, [0.2, 0.3])
+
+    def test_ros_image_publish_cannot_block_critical_publish_thread(self):
+        bridge = Ros2DataBridge.__new__(Ros2DataBridge)
+        bridge._critical_queue = queue.Queue()
+        bridge._critical_queue.put(object())
+        bridge._tactile_queues = (queue.Queue(), queue.Queue())
+        bridge._camera_queues = (queue.Queue(), queue.Queue())
+        bridge._camera_queues[0].put(object())
+        bridge._gripper_command_subscription = None
+        bridge._stop_event = threading.Event()
+        bridge._stop_event.set()
+        bridge._image_available = threading.Event()
+        bridge._drop_counts = {"publish_error": 0}
+        bridge._last_error = ""
+        critical_published = threading.Event()
+        image_started = threading.Event()
+        release_image = threading.Event()
+        bridge._publish_critical = lambda _item: critical_published.set()
+        bridge._publish_tactile = lambda _arm, _item: None
+        bridge._publish_diagnostics = lambda: None
+
+        def block_image(_arm, _item):
+            image_started.set()
+            release_image.wait(timeout=1.0)
+
+        bridge._publish_camera = block_image
+        image_thread = threading.Thread(target=bridge._run_images)
+        critical_thread = threading.Thread(target=bridge._run_critical)
+        image_thread.start()
+        try:
+            self.assertTrue(image_started.wait(timeout=0.2))
+            critical_thread.start()
+            self.assertTrue(critical_published.wait(timeout=0.2))
+        finally:
+            release_image.set()
+            if critical_thread.ident is not None:
+                critical_thread.join(timeout=1.0)
+            image_thread.join(timeout=1.0)
+
     def test_das_calibration_sentinel_recovers_or_names_stuck_side(self):
         configurations = tuple(
             DASFingerConfiguration(
@@ -905,6 +1005,7 @@ class TestMarvinHardware(unittest.TestCase):
         ]([])
         self.assertIsNone(arguments.das_gripper_config)
         self.assertIsNone(arguments.das_sdk_root)
+        self.assertFalse(arguments.das_from_ros2)
 
     def test_collection_supervisor_builds_safe_job_and_shutdown_order(self):
         entry_path = (
@@ -932,20 +1033,39 @@ class TestMarvinHardware(unittest.TestCase):
         commands = namespace["_build_commands"](arguments)
         self.assertIn("--pico-from-ros2", commands["hardware"])
         self.assertIn("--ros2", commands["hardware"])
+        self.assertIn("--das-from-ros2", commands["hardware"])
+        self.assertNotIn("--das-sdk-root", commands["hardware"])
+        self.assertIn("--sdk-root", commands["das"])
         self.assertIn("--calibration", commands["recorder"])
+        self.assertEqual(
+            namespace["PROCESS_CPUS"]["hardware"], (2, 3, 18, 19)
+        )
 
         calls = []
         results = namespace["_shutdown_processes"](
-            {"pico": object(), "recorder": object(), "hardware": object()},
+            {
+                "pico": object(),
+                "das": object(),
+                "recorder": object(),
+                "hardware": object(),
+            },
             stop_process=lambda process, name, timeout: (
                 calls.append((name, timeout)) or 0
             ),
         )
         self.assertEqual(
             calls,
-            [("hardware", 15.0), ("recorder", None), ("pico", 10.0)],
+            [
+                ("hardware", 15.0),
+                ("das", 10.0),
+                ("recorder", None),
+                ("pico", 10.0),
+            ],
         )
-        self.assertEqual(results, {"hardware": 0, "recorder": 0, "pico": 0})
+        self.assertEqual(
+            results,
+            {"hardware": 0, "das": 0, "recorder": 0, "pico": 0},
+        )
 
     def test_optional_ik_nsp_is_initialized_and_angle_is_ramped(self):
         def snapshot(timestamp, grip_values):

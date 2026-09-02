@@ -1,0 +1,10 @@
+| 类别            | Topic                                                        | 类型                                      |
+| :-------------- | :----------------------------------------------------------- | :---------------------------------------- |
+| 主臂(遥操作)    | `/master_left_arm/end_pose`、`/master_left_arm/joint_states`、`/master_right_arm/end_pose`、`/master_right_arm/joint_states` | PoseStamped / JointState                  |
+| 从臂状态        | `/left_arm/end_pose`、`/left_arm/joint_states`、`/left_arm/wrench_ext_local`、`/left_arm/wrench_ext_world`、`/right_arm/...`（同名4个）、`/whole_body/left_arm/end_pose`、`/whole_body/right_arm/end_pose` | PoseStamped / JointState / WrenchStamped  |
+| 升降/头部       | `/lift/joint_states`、`/head/joint_states`                   | JointState                                |
+| 控制器命令      | `/left_arm_joint_controller/commands`、`/left_arm_cartesian_controller/pose_cmd`、`/left_gripper_controller/commands`、`/right_arm_joint_controller/commands`、`/right_arm_cartesian_controller/pose_cmd`、`/right_gripper_controller/commands`、`/head_position_controller/commands`、`/lift_position_controller/commands` | Float64MultiArray / PoseStamped           |
+| 底盘/导航       | `/odom`、`/target_odom`、`/chassis/cmd_vel`、`/goal_pose`、`/precise_goal_pose`、`/nav_cancel`、`/tracked_pose`、`/trajectory_chunk`、`/trajectory_chunk/odom_from_start_position` | Odometry / Twist / PoseStamped / String   |
+| 相机(压缩)      | `/camera_head_front/color/image_raw/compressed`、`/camera_head_front/depth/image_raw/compressedDepth`、`/camera1/usb_cam1/image_raw/image_compressed`、`/camera3/usb_cam3/image_raw/image_compressed`、`/camera_chest_front/color/image_raw/compressed` | **CompressedImage**                       |
+| 音频            | `/audio_server/audiodata_stamped`                            | `protocol/msg/AudioDataStamped`           |
+| 元数据(latched) | `/calibration_params`、`/diversity_data`、`/distribute_data`、`/instruction_data`、`/take_over_data` | `protocol/msg/CalibrationParams` / String |

@@ -139,6 +139,41 @@ def _decode_encoder_value(record_data):
     return float(value)
 
 
+def closedness_to_das_distances(closedness, configurations):
+    closedness = np.asarray(closedness, dtype=float).reshape(-1)
+    if (
+        closedness.shape != (2,)
+        or not np.all(np.isfinite(closedness))
+        or np.any(closedness < 0.0)
+        or np.any(closedness > 1.0)
+    ):
+        raise ValueError("gripper closedness must contain two values within [0, 1]")
+    targets = []
+    for value, configuration in zip(closedness, configurations):
+        if configuration.invert:
+            target = configuration.closed_distance_m + value * (
+                configuration.open_distance_m - configuration.closed_distance_m
+            )
+        else:
+            target = configuration.open_distance_m - value * (
+                configuration.open_distance_m - configuration.closed_distance_m
+            )
+        targets.append(float(np.clip(target, 0.0, MAX_DAS_DISTANCE_M)))
+    return tuple(targets)
+
+
+def das_distances_to_closedness(distances, configurations):
+    closedness = []
+    for distance, configuration in zip(distances, configurations):
+        span = configuration.open_distance_m - configuration.closed_distance_m
+        if configuration.invert:
+            value = (distance - configuration.closed_distance_m) / span
+        else:
+            value = (configuration.open_distance_m - distance) / span
+        closedness.append(float(np.clip(value, 0.0, 1.0)))
+    return tuple(closedness)
+
+
 class DASFingerAdapter:
     """Drive two Gen Finger Controllers through the Python SDK.
 
@@ -470,44 +505,16 @@ class DASFingerAdapter:
 
     def send_gripper_command(self, closedness):
         self._require_connected()
-        closedness = np.asarray(closedness, dtype=float).reshape(-1)
-        if (
-            closedness.shape != (2,)
-            or not np.all(np.isfinite(closedness))
-            or np.any(closedness < 0.0)
-            or np.any(closedness > 1.0)
-        ):
-            raise ValueError(
-                "gripper closedness must contain two values within [0, 1]"
-            )
-        targets = []
-        for value, configuration in zip(closedness, self.configurations):
-            if configuration.invert:
-                target = configuration.closed_distance_m + value * (
-                    configuration.open_distance_m - configuration.closed_distance_m
-                )
-            else:
-                target = configuration.open_distance_m - value * (
-                    configuration.open_distance_m - configuration.closed_distance_m
-                )
-            targets.append(float(np.clip(target, 0.0, MAX_DAS_DISTANCE_M)))
+        targets = closedness_to_das_distances(closedness, self.configurations)
         with self._target_lock:
             self._targets[:] = targets
-        return tuple(targets)
+        return targets
 
     def get_initial_gripper_closedness(self):
         self._require_connected()
         with self._target_lock:
             distances = self._encoder_distances.copy()
-        closedness = []
-        for distance, configuration in zip(distances, self.configurations):
-            span = configuration.open_distance_m - configuration.closed_distance_m
-            if configuration.invert:
-                value = (distance - configuration.closed_distance_m) / span
-            else:
-                value = (configuration.open_distance_m - distance) / span
-            closedness.append(float(np.clip(value, 0.0, 1.0)))
-        return tuple(closedness)
+        return das_distances_to_closedness(distances, self.configurations)
 
     def get_encoder_distances(self):
         return self.get_gripper_state()["distance_m"]

@@ -13,7 +13,12 @@ ARM_NAMES = ("left", "right")
 class Ros2DataBridge:
     """Publish raw streams without allowing recorder backpressure into control."""
 
-    def __init__(self, node_name="marvin_data_bridge"):
+    def __init__(
+        self,
+        node_name="marvin_data_bridge",
+        gripper_command_callback=None,
+        publish_gripper_commands=True,
+    ):
         try:
             import rclpy
             from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
@@ -85,10 +90,22 @@ class Ros2DataBridge:
             "joint_command": self._node.create_publisher(
                 JointCommand, "/command/marvin/joint_target", critical_qos
             ),
-            "gripper_command": self._node.create_publisher(
-                GripperCommand, "/command/das/target", critical_qos
-            ),
         }
+        if publish_gripper_commands:
+            self._publishers["gripper_command"] = self._node.create_publisher(
+                GripperCommand, "/command/das/target", critical_qos
+            )
+        self._gripper_command_callback = gripper_command_callback
+        self._gripper_command_subscription = (
+            None
+            if gripper_command_callback is None
+            else self._node.create_subscription(
+                GripperCommand,
+                "/command/das/target",
+                self._handle_gripper_command,
+                critical_qos,
+            )
+        )
         self._das_publishers = tuple(
             self._node.create_publisher(
                 DasState, f"/raw/das/{side}/state", critical_qos
@@ -124,10 +141,19 @@ class Ros2DataBridge:
         }
         self._last_error = ""
         self._stop_event = threading.Event()
-        self._thread = threading.Thread(
-            target=self._run, name="ros2-data-bridge", daemon=True
+        self._image_available = threading.Event()
+        self._critical_thread = threading.Thread(
+            target=self._run_critical,
+            name="ros2-critical-bridge",
+            daemon=True,
         )
-        self._thread.start()
+        self._image_thread = threading.Thread(
+            target=self._run_images,
+            name="ros2-image-bridge",
+            daemon=True,
+        )
+        self._critical_thread.start()
+        self._image_thread.start()
 
     def _next_sequence(self, stream):
         with self._sequence_lock:
@@ -181,6 +207,8 @@ class Ros2DataBridge:
         )
 
     def publish_gripper_command(self, closedness, wall_time_ns=None, steady_ns=None):
+        if "gripper_command" not in self._publishers:
+            return
         wall_time_ns = time.time_ns() if wall_time_ns is None else int(wall_time_ns)
         steady_ns = time.monotonic_ns() if steady_ns is None else int(steady_ns)
         self._enqueue(
@@ -194,6 +222,13 @@ class Ros2DataBridge:
             ),
             "critical",
         )
+
+    def _handle_gripper_command(self, message):
+        try:
+            self._gripper_command_callback(tuple(message.closedness))
+        except Exception as error:
+            self._drop_counts["publish_error"] += 1
+            self._last_error = str(error)
 
     def publish_das_state(self, arm_index, state):
         self._enqueue(
@@ -237,6 +272,7 @@ class Ros2DataBridge:
             ),
             "camera",
         )
+        self._image_available.set()
 
     @staticmethod
     def _stamp(header, wall_time_ns, frame_id):
@@ -357,16 +393,17 @@ class Ros2DataBridge:
             self._drop_counts["publish_error"] += 1
             self._last_error = str(error)
 
-    def _run(self):
+    def _run_critical(self):
         next_diagnostic_time = time.monotonic()
         queues = (
             self._critical_queue,
             *self._tactile_queues,
-            *self._camera_queues,
         )
         while not self._stop_event.is_set() or any(
             not target_queue.empty() for target_queue in queues
         ):
+            if self._gripper_command_subscription is not None:
+                self._rclpy.spin_once(self._node, timeout_sec=0.0)
             try:
                 self._publish_safely(
                     self._publish_critical, self._critical_queue.get_nowait()
@@ -380,6 +417,14 @@ class Ros2DataBridge:
                     )
                 except queue.Empty:
                     pass
+            if time.monotonic() >= next_diagnostic_time:
+                self._publish_safely(self._publish_diagnostics)
+                next_diagnostic_time += 1.0
+            time.sleep(0.002)
+
+    def _run_images(self):
+        while True:
+            self._image_available.clear()
             for arm_index, target_queue in enumerate(self._camera_queues):
                 try:
                     self._publish_safely(
@@ -387,14 +432,19 @@ class Ros2DataBridge:
                     )
                 except queue.Empty:
                     pass
-            if time.monotonic() >= next_diagnostic_time:
-                self._publish_safely(self._publish_diagnostics)
-                next_diagnostic_time += 1.0
-            time.sleep(0.002)
+            queues_empty = all(
+                target_queue.empty() for target_queue in self._camera_queues
+            )
+            if self._stop_event.is_set() and queues_empty:
+                return
+            if queues_empty:
+                self._image_available.wait()
 
     def close(self):
         self._stop_event.set()
-        self._thread.join(timeout=5.0)
+        self._image_available.set()
+        self._critical_thread.join(timeout=5.0)
+        self._image_thread.join(timeout=5.0)
         self._node.destroy_node()
         if self._owns_context and self._rclpy.ok():
             self._rclpy.shutdown()
