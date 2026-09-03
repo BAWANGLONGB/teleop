@@ -14,7 +14,12 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def inspect_bag(path, storage_id="mcap", expected_steady_offset_ns=None):
+def inspect_bag(
+    path,
+    storage_id="mcap",
+    expected_steady_offset_ns=None,
+    expected_topic_offsets_ns=None,
+):
     try:
         import rosbag2_py
         from rclpy.serialization import deserialize_message
@@ -80,7 +85,10 @@ def inspect_bag(path, storage_id="mcap", expected_steady_offset_ns=None):
         if (
             steady_time
             and expected_steady_offset_ns is not None
-            and bag_time_ns != steady_time + expected_steady_offset_ns
+            and bag_time_ns
+            != steady_time
+            + expected_steady_offset_ns
+            - (expected_topic_offsets_ns or {}).get(topic, 0)
         ):
             item["steady_alignment_errors"] += 1
         sequence = int(getattr(message, "sequence_id", 0))
@@ -125,6 +133,11 @@ def validate_episode(
         .get("alignment", {})
         .get("steady_to_wall_offset_ns")
     )
+    topic_offsets_ns = (
+        metadata.get("postprocessing", {})
+        .get("alignment", {})
+        .get("topic_time_offsets_ns", {})
+    )
     bags = {}
     errors = []
     degraded = []
@@ -145,6 +158,9 @@ def validate_episode(
                 bag_path,
                 expected_steady_offset_ns=(
                     steady_offset_ns if bag_name == processed_bag else None
+                ),
+                expected_topic_offsets_ns=(
+                    topic_offsets_ns if bag_name == processed_bag else None
                 ),
             )
         except Exception as error:

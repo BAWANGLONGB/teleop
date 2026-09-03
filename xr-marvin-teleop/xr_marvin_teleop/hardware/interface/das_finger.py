@@ -17,6 +17,7 @@ MAX_DAS_DISTANCE_M = 0.2
 ENCODER_ZERO_TOLERANCE_M = 0.001
 DAS_ENCODER_CALIBRATION_CODE = -66.66
 ARM_NAMES = ("left", "right")
+DEFAULT_CAMERA_LATENCY_MS = {"640x480": 25.0}
 
 
 class DASFingerCalibrationRequired(RuntimeError):
@@ -36,6 +37,7 @@ class DASFingerConfiguration:
     camera_resolution: str = "640x480"
     startup_distance_m: float = 0.05
     tactile_hz: float = 30.0
+    camera_latency_ms: float | None = None
 
     def __post_init__(self):
         serial_port = str(self.serial_port).strip()
@@ -75,10 +77,21 @@ class DASFingerConfiguration:
         if camera_fps <= 0:
             raise ValueError("DAS camera_fps must be positive")
         object.__setattr__(self, "camera_fps", camera_fps)
-        camera_resolution = str(self.camera_resolution).strip()
+        camera_resolution = str(self.camera_resolution).strip().lower()
         if not camera_resolution:
             raise ValueError("DAS camera_resolution must not be empty")
         object.__setattr__(self, "camera_resolution", camera_resolution)
+        camera_latency_ms = (
+            DEFAULT_CAMERA_LATENCY_MS.get(camera_resolution)
+            if self.camera_latency_ms is None
+            else float(self.camera_latency_ms)
+        )
+        if camera_latency_ms is not None and (
+            not np.isfinite(camera_latency_ms)
+            or not 0.0 <= camera_latency_ms <= 1000.0
+        ):
+            raise ValueError("DAS camera_latency_ms must be within [0, 1000]")
+        object.__setattr__(self, "camera_latency_ms", camera_latency_ms)
         tactile_hz = float(self.tactile_hz)
         if not np.isfinite(tactile_hz) or tactile_hz <= 0.0:
             raise ValueError("DAS tactile_hz must be positive")

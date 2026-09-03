@@ -8,7 +8,8 @@
     "invert": false,
     "tactile_hz": 10,
     "camera_fps": 60,
-    "camera_resolution": "640x480"
+    "camera_resolution": "1600x1296",
+    "camera_latency_ms": 22.0
   },
   "right": {
     "serial_port": "/dev/ttyFingerRight",
@@ -19,6 +20,7 @@
     "invert": false,
     "tactile_hz": 10,
     "camera_fps": 60,
-    "camera_resolution": "640x480"
+    "camera_resolution": "1600x1296",
+    "camera_latency_ms": 24.0
   }
 }

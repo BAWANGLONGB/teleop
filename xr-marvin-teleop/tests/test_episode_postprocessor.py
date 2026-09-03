@@ -32,6 +32,20 @@ class TestEpisodePostprocessor(unittest.TestCase):
         )
         self.assertEqual((first, second, source), (1_000, 1_001, "bag_time_ns"))
 
+    def test_camera_alignment_applies_latency_correction(self):
+        message = SimpleNamespace(receive_steady_ns=1_000, issue_steady_ns=0)
+        timestamp, source = _topic_aligned_time_ns(
+            "/raw/das/left/image/compressed", message, 9_999, 500, 25
+        )
+        self.assertEqual((timestamp, source), (1_475, "receive_steady_ns"))
+
+    def test_camera_resolution_latency_defaults(self):
+        low = DASFingerConfiguration("/dev/l", "/dev/cl", 0.0, 0.15)
+        high = DASFingerConfiguration(
+            "/dev/l", "/dev/cl", 0.0, 0.15, camera_resolution="1600x1296"
+        )
+        self.assertEqual((low.camera_latency_ms, high.camera_latency_ms), (25.0, None))
+
     def test_review_uses_nearest_feedback_and_previous_command(self):
         namespace = runpy.run_path(
             str(
@@ -115,6 +129,50 @@ class TestEpisodePostprocessor(unittest.TestCase):
         self.assertNotIn("jpegenc", description)
         self.assertTrue(namespace["is_jpeg"](b"\xff\xd8data\xff\xd9"))
         self.assertFalse(namespace["is_jpeg"](b"raw-bgr"))
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "left.jpg"
+            writer = namespace["NativeMjpegWriter"].__new__(
+                namespace["NativeMjpegWriter"]
+            )
+            writer.preview_file = preview
+            writer._next_preview_ns = 0
+            writer._preview_disabled = False
+            writer.side = "left"
+            writer._write_preview(b"\xff\xd8first\xff\xd9", 1)
+            writer._write_preview(b"\xff\xd8skipped\xff\xd9", 2)
+            self.assertEqual(preview.read_bytes(), b"\xff\xd8first\xff\xd9")
+            writer._write_preview(
+                b"\xff\xd8second\xff\xd9",
+                1_000_000_000 // namespace["PREVIEW_FPS"] + 1,
+            )
+            self.assertEqual(preview.read_bytes(), b"\xff\xd8second\xff\xd9")
+            self.assertFalse(list(preview.parent.glob("*.tmp")))
+
+        recorder = runpy.run_path(
+            str(
+                Path(__file__).resolve().parents[1]
+                / "scripts"
+                / "data"
+                / "record_episode.py"
+            )
+        )
+        command = recorder["_camera_command"](
+            Path("/project"),
+            "left",
+            SimpleNamespace(
+                camera_device="/dev/finger_camera_left",
+                camera_resolution="640x480",
+                camera_fps=60,
+            ),
+            Path("/output"),
+            Path("/storage.yaml"),
+            Path("/ready"),
+            Path("/dev/shm/preview/left.jpg"),
+        )
+        self.assertEqual(
+            command[command.index("--preview-file") + 1],
+            "/dev/shm/preview/left.jpg",
+        )
 
     def test_urdf_fk_and_rpy(self):
         project_root = Path(__file__).resolve().parents[1]

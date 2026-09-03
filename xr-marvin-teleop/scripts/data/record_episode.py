@@ -165,8 +165,9 @@ def _camera_command(
     output,
     storage_config,
     ready_file,
+    preview_file=None,
 ):
-    return [
+    command = [
         "/usr/bin/python3",
         str(project_root / "scripts" / "data" / "capture_das_mjpeg.py"),
         "--side",
@@ -184,6 +185,9 @@ def _camera_command(
         "--ready-file",
         str(ready_file),
     ]
+    if preview_file is not None:
+        command.extend(("--preview-file", str(preview_file)))
+    return command
 
 
 def _start_recorder(command, log_path):
@@ -256,6 +260,7 @@ def main():
     parser.add_argument("--max-duration", type=float)
     parser.add_argument("--ready-file", type=Path)
     parser.add_argument("--camera-startup-timeout", type=float, default=10.0)
+    parser.add_argument("--preview-root", type=Path)
     arguments = parser.parse_args()
     if not arguments.task.strip():
         parser.error("--task must not be empty")
@@ -263,6 +268,11 @@ def main():
         parser.error("--max-duration must be positive")
     if arguments.camera_startup_timeout <= 0.0:
         parser.error("--camera-startup-timeout must be positive")
+    if arguments.preview_root is not None:
+        arguments.preview_root = arguments.preview_root.expanduser().resolve()
+        arguments.preview_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for side in ARM_NAMES:
+            (arguments.preview_root / f"{side}.jpg").unlink(missing_ok=True)
     try:
         extra_metadata = _parse_metadata(arguments.metadata)
     except ValueError as error:
@@ -325,6 +335,18 @@ def main():
             if arguments.no_vision
             else ["state", "vision_left", "vision_right"]
         ),
+        "camera_profiles": {
+            side: {
+                "resolution": configuration.camera_resolution,
+                "fps": configuration.camera_fps,
+                "latency_correction_ns": (
+                    None
+                    if configuration.camera_latency_ms is None
+                    else round(configuration.camera_latency_ms * 1_000_000)
+                ),
+            }
+            for side, configuration in zip(ARM_NAMES, configurations or ())
+        },
     }
     metadata_path = episode_directory / "metadata.json"
     _write_json(metadata_path, metadata)
@@ -357,6 +379,11 @@ def main():
                     episode_directory / f"vision_{side}",
                     config_root / "mcap_mjpeg.yaml",
                     camera_ready_files[f"vision_{side}"],
+                    (
+                        None
+                        if arguments.preview_root is None
+                        else arguments.preview_root / f"{side}.jpg"
+                    ),
                 ),
             )
             for side, configuration in zip(ARM_NAMES, configurations)

@@ -54,6 +54,7 @@ def parse_command_line_arguments(arguments=None):
     parser.add_argument("--notes", default="")
     parser.add_argument("--max-duration", type=float)
     parser.add_argument("--no-vision", action="store_true")
+    parser.add_argument("--preview-root", type=Path)
     parser.add_argument("--pico-poll-hz", type=float, default=120.0)
     parser.add_argument("--startup-timeout", type=float, default=15.0)
     parser.add_argument("--robot-ip", default="192.168.1.190")
@@ -221,6 +222,8 @@ def _build_commands(arguments):
         recorder.extend(("--max-duration", str(arguments.max_duration)))
     if arguments.no_vision:
         recorder.append("--no-vision")
+    elif arguments.preview_root is not None:
+        recorder.extend(("--preview-root", str(arguments.preview_root)))
 
     hardware = [
         python,

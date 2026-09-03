@@ -1023,6 +1023,43 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertIsNone(arguments.das_sdk_root)
         self.assertFalse(arguments.das_from_ros2)
 
+    def test_standalone_reset_reuses_safe_cosine_return(self):
+        entry_path = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "hardware"
+            / "reset_marvin_hardware.py"
+        )
+        reset_robot = runpy.run_path(str(entry_path))["reset_robot"]
+        adapter = FakeMarvinSdkAdapter()
+        clock = [0.0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        reset_robot(
+            adapter,
+            None,
+            duration=0.04,
+            expected_sdk_version=1,
+            monotonic=lambda: clock[0],
+            sleep=sleep,
+        )
+
+        np.testing.assert_allclose(
+            adapter.sent_commands_rad[-1], MARVIN_INITIAL_POSE_Q_RAD
+        )
+        self.assertEqual(
+            adapter.events[:3],
+            [
+                "configure_control_parameters",
+                "enter_joint_impedance",
+                "enable_pd_feedforward",
+            ],
+        )
+        self.assertTrue(adapter.idle)
+        self.assertTrue(adapter.released)
+
     def test_collection_supervisor_builds_safe_job_and_shutdown_order(self):
         entry_path = (
             Path(__file__).resolve().parents[1]
@@ -1044,6 +1081,8 @@ class TestMarvinHardware(unittest.TestCase):
                 "das.json",
                 "--das-sdk-root",
                 "das-sdk",
+                "--preview-root",
+                "/dev/shm/fieldnote-preview-test",
             ]
         )
         commands = namespace["_build_commands"](arguments)
@@ -1056,6 +1095,7 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertIn("--das-config", commands["recorder"])
         self.assertIn("--ready-file", commands["recorder"])
         self.assertIn("--calibration", commands["recorder"])
+        self.assertIn("--preview-root", commands["recorder"])
         self.assertEqual(
             namespace["PROCESS_CPUS"]["hardware"], (2, 3, 18, 19)
         )

@@ -199,13 +199,20 @@ def _aligned_time_ns(message, bag_time_ns, steady_to_wall_offset_ns):
 
 
 def _topic_aligned_time_ns(
-    topic, message, bag_time_ns, steady_to_wall_offset_ns
+    topic,
+    message,
+    bag_time_ns,
+    steady_to_wall_offset_ns,
+    topic_time_offset_ns=0,
 ):
     # DiagnosticArray has no monotonic timestamp and /diagnostics has multiple
     # publishers, so DDS arrival order is the only stable ordering key.
     if topic == "/diagnostics":
         return int(bag_time_ns), "bag_time_ns"
-    return _aligned_time_ns(message, bag_time_ns, steady_to_wall_offset_ns)
+    aligned_time_ns, source = _aligned_time_ns(
+        message, bag_time_ns, steady_to_wall_offset_ns
+    )
+    return aligned_time_ns - int(topic_time_offset_ns), source
 
 
 def _pose_message(message_type, source_message, arm, transform, source):
@@ -256,6 +263,19 @@ def postprocess_episode(
         if metadata_path.is_file()
         else {}
     )
+    topic_time_offsets_ns = {
+        f"/raw/das/{side}/image/compressed": int(
+            profile.get("latency_correction_ns", 0)
+        )
+        for side, profile in metadata.get("camera_profiles", {}).items()
+        if side in ("left", "right")
+        and profile.get("latency_correction_ns") is not None
+    }
+    if any(
+        not 0 <= value <= 1_000_000_000
+        for value in topic_time_offsets_ns.values()
+    ):
+        raise ValueError("camera latency corrections must be within [0, 1 s]")
     state_path = episode_directory / "state"
     if not (state_path / "metadata.yaml").is_file():
         raise FileNotFoundError(f"state bag not found: {state_path}")
@@ -387,7 +407,11 @@ def postprocess_episode(
                 raise RuntimeError(f"unexpected filtered topic: {topic}")
             message = deserialize_message(serialized, cursor["message_type"])
             aligned_time_ns, alignment_source = _topic_aligned_time_ns(
-                topic, message, bag_time_ns, steady_to_wall_offset_ns
+                topic,
+                message,
+                bag_time_ns,
+                steady_to_wall_offset_ns,
+                topic_time_offsets_ns.get(topic, 0),
             )
             previous_time_ns = cursor["last_aligned_time_ns"]
             if previous_time_ns is not None and aligned_time_ns < previous_time_ns:
@@ -466,7 +490,7 @@ def postprocess_episode(
         total_ns = item.pop("sum_ns")
         item["mean_ns"] = 0 if not item["count"] else total_ns // item["count"]
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "processed_at_ns": time.time_ns(),
         "input_bags": [
             str(path.relative_to(episode_directory)) for path in input_paths
@@ -479,6 +503,7 @@ def postprocess_episode(
             "steady_to_wall_offset_ns": steady_to_wall_offset_ns,
             "calibration_samples": len(clock_offsets_ns),
             "calibration_span_ns": clock_offsets_ns[-1] - clock_offsets_ns[0],
+            "topic_time_offsets_ns": topic_time_offsets_ns,
             "source_counts": alignment_source_counts,
             "original_bag_delay": bag_delay_stats,
         },

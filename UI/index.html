@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#151a17">
+  <title>Fieldnote · 机器人数据采集平台</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <svg class="svg-sprite" aria-hidden="true">
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
+    <symbol id="i-data" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></symbol>
+    <symbol id="i-device" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="14" rx="3"/><path d="M8 21h8M12 17v4M8 8h.01M11 8h5M8 12h8"/></symbol>
+    <symbol id="i-tune" viewBox="0 0 24 24"><path d="M4 6h6M14 6h6M4 18h10M18 18h2M10 3v6M14 15v6M4 12h2M10 12h10M6 9v6"/></symbol>
+    <symbol id="i-flow" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="2"/><rect x="15" y="15" width="6" height="6" rx="2"/><rect x="15" y="3" width="6" height="6" rx="2"/><path d="M9 6h6M18 9v6M9 6c0 7 2 12 6 12"/></symbol>
+    <symbol id="i-log" viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.7 9a2.5 2.5 0 1 1 3.1 2.4c-.8.3-.8.9-.8 1.6M12 17h.01"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M15 7h4a2 2 0 0 1 2 2v9H3V9a2 2 0 0 1 2-2h4l1-2h4z"/><circle cx="12" cy="12.5" r="3.5"/></symbol>
+    <symbol id="i-signal" viewBox="0 0 24 24"><path d="M5 16.5a10 10 0 0 1 14 0M8 13a6 6 0 0 1 8 0M11 9.5a2 2 0 0 1 2 0M12 20h.01"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 3h6l1 4H8zM7 7l1 14h8l1-14M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5M18.5 9A7 7 0 0 0 6.4 6.4L4 9M5.5 15A7 7 0 0 0 17.6 17.6L20 15"/></symbol>
+  </svg>
+
+  <aside class="sidebar" aria-label="主导航">
+    <a class="brand" href="#workbench" data-nav="workbench" aria-label="Fieldnote 首页">
+      <span class="brand-mark"><i></i><i></i><i></i></span>
+      <span><b>FIELDNOTE</b><small>DATA OPERATIONS</small></span>
+    </a>
+
+    <nav>
+      <p class="nav-label">工作空间</p>
+      <button class="nav-item active" data-nav="workbench"><svg><use href="#i-grid"/></svg><span>采集作业</span></button>
+      <button class="nav-item" data-nav="datasets"><svg><use href="#i-data"/></svg><span>数据集</span><em id="datasetCount">28</em></button>
+      <button class="nav-item" data-nav="devices"><svg><use href="#i-device"/></svg><span>设备管理</span></button>
+      <button class="nav-item" data-nav="calibration"><svg><use href="#i-tune"/></svg><span>标定中心</span></button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="station-row">
+        <span class="station-icon"><svg><use href="#i-device"/></svg></span>
+        <span><b>采集站 01</b><small><i class="status-dot"></i>在线 · 192.168.1.42</small></span>
+        <svg class="chevron"><use href="#i-chevron"/></svg>
+      </div>
+      <div class="version">Console v0.1 · ROS 2 Humble</div>
+    </div>
+  </aside>
+
+  <div class="app">
+    <header class="topbar">
+      <button class="mobile-menu" id="menuButton" aria-label="打开导航"><span></span><span></span></button>
+      <div class="crumb"><span>Marvin 双臂实验室</span><svg><use href="#i-chevron"/></svg><strong id="pageCrumb">采集作业</strong></div>
+      <div class="top-actions">
+        <button class="icon-button" aria-label="帮助"><svg><use href="#i-help"/></svg></button>
+        <button class="icon-button has-notice" aria-label="通知"><svg><use href="#i-bell"/></svg></button>
+        <span class="top-divider"></span>
+        <button class="profile"><span class="avatar">Z</span><span><b>zxcx</b><small>采集员</small></span><svg><use href="#i-chevron"/></svg></button>
+      </div>
+    </header>
+
+    <main>
+      <section class="view active" id="view-workbench">
+        <div class="page-heading">
+          <div><p class="eyebrow">03 SEP 2026 · 采集站 01</p><h1>采集作业台</h1><p>确认链路状态，开始一段高质量机器人示教。</p></div>
+          <div class="heading-actions"><button class="pico-connection disconnected" id="picoConnection"><span class="pico-orb"><svg><use href="#i-signal"/></svg><i></i></span><span><b>PICO 未连接</b><small>等待后端检测</small></span></button><span class="ready-pill not-ready" id="overallReady"><i></i><span>PICO 未就绪</span></span><button class="button secondary" id="runCheck"><svg><use href="#i-signal"/></svg>重新检测</button></div>
+        </div>
+
+        <div class="metric-grid">
+          <article class="metric-card">
+            <span class="metric-icon mint"><svg><use href="#i-data"/></svg></span>
+            <div><p>今日有效采集</p><strong>4 <small>episodes</small></strong><span class="metric-note positive">↑ 1 较昨日</span></div>
+          </article>
+          <article class="metric-card">
+            <span class="metric-icon blue"><svg><use href="#i-log"/></svg></span>
+            <div><p>有效数据时长</p><strong>18.4 <small>min</small></strong><span class="metric-note">目标 30 min</span></div>
+          </article>
+          <article class="metric-card">
+            <span class="metric-icon amber"><svg><use href="#i-folder"/></svg></span>
+            <div><p>可用存储</p><strong>824 <small>GiB</small></strong><span class="metric-note">预计可采 26 h</span></div>
+          </article>
+          <article class="metric-card">
+            <span class="metric-icon violet"><svg><use href="#i-signal"/></svg></span>
+            <div><p>PICO 连接</p><strong id="picoMetricStatus">离线</strong><span class="metric-note" id="picoMetricNote">等待检测</span></div>
+          </article>
+        </div>
+
+        <div class="workspace-grid">
+          <article class="panel monitor-panel">
+            <div class="panel-head">
+              <div><span class="section-kicker">实时监看</span><h2 id="monitorTitle">等待采集</h2></div>
+              <div class="monitor-actions"><button class="button secondary robot-reset" type="button" id="resetRobot" disabled title="仅在数采之外复位机器人"><svg><use href="#i-refresh"/></svg>机器人复位</button><div class="live-state" id="liveState"><i></i><span>STANDBY</span><time id="sessionTimer">00:00:00</time></div></div>
+            </div>
+            <div class="camera-grid" id="cameraGrid">
+              <div class="camera-feed left-camera">
+                <div class="camera-toolbar"><span><i></i>DAS 左目</span><small class="camera-format">640 × 480 · 目标 60 Hz</small></div>
+                <div class="camera-scene">
+                  <span class="scene-grid"></span><span class="work-surface"></span>
+                  <span class="robot-arm arm-left"><i></i><i></i><i></i></span>
+                  <span class="target-cube"></span><span class="focus-frame"></span>
+                  <span class="preview-status">等待采集画面</span>
+                  <img class="camera-preview" data-side="left" alt="DAS 左目实时画面">
+                </div>
+                <div class="camera-foot"><span>CAM_L / MJPEG</span><span data-preview-state>等待帧</span></div>
+              </div>
+              <div class="camera-feed right-camera">
+                <div class="camera-toolbar"><span><i></i>DAS 右目</span><small class="camera-format">640 × 480 · 目标 60 Hz</small></div>
+                <div class="camera-scene">
+                  <span class="scene-grid"></span><span class="work-surface"></span>
+                  <span class="robot-arm arm-right"><i></i><i></i><i></i></span>
+                  <span class="target-cube"></span><span class="focus-frame"></span>
+                  <span class="preview-status">等待采集画面</span>
+                  <img class="camera-preview" data-side="right" alt="DAS 右目实时画面">
+                </div>
+                <div class="camera-foot"><span>CAM_R / MJPEG</span><span data-preview-state>等待帧</span></div>
+              </div>
+            </div>
+            <div class="monitor-errors" id="monitorErrors" role="status" aria-live="polite">
+              <div><b id="monitorErrorTitle">设备状态检查中</b><time id="monitorErrorTime">—</time></div>
+              <ul id="monitorErrorList"><li>等待端口检测结果</li></ul>
+            </div>
+          </article>
+
+          <aside class="panel launch-panel">
+            <div class="panel-head compact"><div><span class="section-kicker">本次任务</span><h2>采集配置</h2></div><button class="text-button" id="resetConfig">重置</button></div>
+            <form id="collectionForm">
+              <label>任务名称<input name="task" value="pick_and_place" autocomplete="off"></label>
+              <div class="form-row">
+                <label>采集员<input name="operator" value="zxcx" autocomplete="off"></label>
+                <label>最长时长<select name="duration"><option value="">不限</option><option value="180">3 分钟</option><option value="300">5 分钟</option><option value="600">10 分钟</option></select></label>
+              </div>
+              <label>机器人型号<select name="robot"><option>M6S-Lite-CCS-680-B</option></select></label>
+              <fieldset>
+                <legend>采集模态</legend>
+                <label class="switch-row"><span><b>双目视觉</b><small>左右 DAS 原生 MJPEG</small></span><input type="checkbox" id="visionEnabled" checked><i></i></label>
+                <div class="form-row vision-options" id="visionOptions">
+                  <label>图像分辨率<select name="camera_resolution" id="visionResolution"><option value="640x480">640 × 480 · 当前</option><option value="1600x1296">1600 × 1296 · SDK</option></select></label>
+                  <label>相机帧率（固定）<select name="camera_fps" id="visionFps" disabled><option value="60" selected>60 FPS · 固定</option></select></label>
+                  <p><b>DAS SDK</b> 设置帧率 60 FPS，实际采集帧率约 30 FPS</p>
+                </div>
+                <label class="switch-row"><span><b>触觉数据</b><small>双侧编码器与阵列</small></span><input type="checkbox" checked><i></i></label>
+                <label class="switch-row"><span><b>NSP 肘部映射</b><small>保持普通 IK 回退</small></span><input type="checkbox" id="nspLateral"><i></i></label>
+              </fieldset>
+              <button class="button primary launch-button" type="button" id="startButton" disabled><svg><use href="#i-play"/></svg><span>开始采集</span><kbd>Enter</kbd></button>
+              <p class="safety-note"><svg><use href="#i-check"/></svg>启动前仍需现场确认急停与关节映射</p>
+            </form>
+          </aside>
+        </div>
+
+        <div class="lower-grid">
+          <article class="panel streams-panel">
+            <div class="panel-head compact"><div><span class="section-kicker">链路健康</span><h2>数据流</h2></div><button class="text-button" data-nav="devices">查看拓扑 <svg><use href="#i-arrow"/></svg></button></div>
+            <div class="stream-list">
+              <div class="stream-row"><span class="stream-symbol pico">P</span><span><b>Robotics Service</b><small>TCP 63901 / 60061</small></span><span class="rate"><b id="picoStreamRate">—</b><small id="picoStreamLatency">—</small></span><span class="health offline" id="picoStreamHealth">离线</span></div>
+              <div class="stream-row"><span class="stream-symbol arm">M</span><span><b>Marvin 双臂</b><small>192.168.1.190 · ICMP</small></span><span class="rate"><b id="marvinStreamRate">—</b><small id="marvinStreamAge">Ping 检测</small></span><span class="health offline" id="marvinStreamHealth">离线</span></div>
+              <div class="stream-row"><span class="stream-symbol tactile">D</span><span><b>DAS 双侧夹爪</b><small>/dev/ttyFingerLeft / Right</small></span><span class="rate"><b id="dasStreamRate">—</b><small id="dasStreamAge">设备节点</small></span><span class="health offline" id="dasStreamHealth">离线</span></div>
+              <div class="stream-row"><span class="stream-symbol vision">V</span><span><b>DAS 双目视觉</b><small>/dev/finger_camera_left / right</small></span><span class="rate"><b id="visionRate">—</b><small id="visionStreamAge">设备节点</small></span><span class="health offline" id="visionHealth">离线</span></div>
+            </div>
+          </article>
+
+          <article class="panel quality-panel">
+            <div class="panel-head compact"><div><span class="section-kicker">今日质量</span><h2>有效数据</h2></div><span class="date-tag">09 / 03</span></div>
+            <div class="quality-body">
+              <div class="donut"><span><b>93</b><small>%</small></span></div>
+              <div class="quality-copy"><b>28 / 30 通过</b><p>2 段因图像丢帧待复核</p><div class="legend"><span><i></i>通过 28</span><span><i></i>待复核 2</span></div></div>
+            </div>
+          </article>
+        </div>
+
+        <article class="panel episodes-panel">
+          <div class="panel-head compact"><div><span class="section-kicker">数据资产</span><h2>最近采集</h2></div><button class="button ghost" data-nav="datasets">查看全部 <svg><use href="#i-arrow"/></svg></button></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Episode</th><th>任务</th><th>采集员</th><th>时长</th><th>数据量</th><th>质量</th><th>状态</th><th></th></tr></thead>
+              <tbody>
+                <tr data-episode="episode_131937_81295016"><td><b>EP · 81295016</b><small>今天 13:19</small></td><td>pick_and_place</td><td><span class="mini-avatar">Z</span>zxcx</td><td>01:55</td><td>5.2 GB</td><td><b class="score">99.2</b></td><td><span class="table-status passed">已通过</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>
+                <tr data-episode="episode_105948_83210975"><td><b>EP · 83210975</b><small>今天 10:59</small></td><td>pick_and_place</td><td><span class="mini-avatar">Z</span>zxcx</td><td>04:31</td><td>12.7 GB</td><td><b class="score">97.8</b></td><td><span class="table-status passed">已通过</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>
+                <tr data-episode="episode_104102_1098d89f"><td><b>EP · 1098d89f</b><small>今天 10:41</small></td><td>pick_and_place</td><td><span class="mini-avatar">Z</span>zxcx</td><td>11:04</td><td>30.1 GB</td><td><b class="score warn">88.4</b></td><td><span class="table-status review">待复核</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="view" id="view-datasets">
+        <div class="page-heading"><div><p class="eyebrow">DATA LIBRARY</p><h1>数据集</h1><p>检索、复核并导出标准化 Episode。</p></div><button class="button primary small" data-nav="workbench"><svg><use href="#i-play"/></svg>新建采集</button></div>
+        <article class="panel dataset-browser">
+          <div class="dataset-tools"><label class="search"><svg><use href="#i-search"/></svg><input id="episodeSearch" placeholder="搜索 Episode 或任务"></label><button class="button secondary"><svg><use href="#i-filter"/></svg>全部状态</button><button class="button secondary export-button" id="exportMcap" disabled><svg><use href="#i-data"/></svg>导出 MCAP <span id="exportCount" aria-live="polite">0</span></button><span id="datasetSummary">共 28 段 · 126.8 GB</span></div>
+          <div class="table-wrap"><table><thead><tr><th><label class="episode-choice"><input type="checkbox" id="selectAllEpisodes" aria-label="选择全部可见 Episode"><span>Episode</span></label></th><th>任务</th><th>创建时间</th><th>模态</th><th>时长</th><th>质量</th><th>状态</th><th></th></tr></thead><tbody id="datasetRows">
+            <tr data-episode="episode_131937_81295016"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 episode_131937_81295016"><b>EP · 81295016</b></label></td><td>pick_and_place</td><td>2026-09-03 13:19</td><td><span class="modality">视觉</span><span class="modality">触觉</span><span class="modality">关节</span></td><td>01:55</td><td><b class="score">99.2</b></td><td><span class="table-status passed">已通过</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>
+            <tr data-episode="episode_105948_83210975"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 episode_105948_83210975"><b>EP · 83210975</b></label></td><td>pick_and_place</td><td>2026-09-03 10:59</td><td><span class="modality">视觉</span><span class="modality">触觉</span><span class="modality">关节</span></td><td>04:31</td><td><b class="score">97.8</b></td><td><span class="table-status passed">已通过</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>
+            <tr data-episode="episode_104102_1098d89f"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 episode_104102_1098d89f"><b>EP · 1098d89f</b></label></td><td>pick_and_place</td><td>2026-09-03 10:41</td><td><span class="modality">视觉</span><span class="modality">触觉</span><span class="modality">关节</span></td><td>11:04</td><td><b class="score warn">88.4</b></td><td><span class="table-status review">待复核</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>
+            <tr data-episode="episode_103901_baf8d664"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 episode_103901_baf8d664"><b>EP · baf8d664</b></label></td><td>pick_and_place</td><td>2026-09-03 10:39</td><td><span class="modality">触觉</span><span class="modality">关节</span></td><td>02:08</td><td><b class="score">96.1</b></td><td><span class="table-status passed">已通过</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>
+            <tr data-episode="episode_202442_1fc3523a"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 episode_202442_1fc3523a"><b>EP · 1fc3523a</b></label></td><td>pick_and_place</td><td>2026-09-02 20:24</td><td><span class="modality">视觉</span><span class="modality">触觉</span><span class="modality">关节</span></td><td>07:42</td><td><b class="score warn">84.7</b></td><td><span class="table-status rejected">已拒绝</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>
+          </tbody></table></div>
+        </article>
+        <article class="panel usage-guide" aria-labelledby="usageGuideTitle">
+          <div class="panel-head compact"><div><span class="section-kicker">QUICK START</span><h2 id="usageGuideTitle">使用说明</h2></div></div>
+          <div class="usage-guide-grid">
+            <section>
+              <h3><span>01</span>PICO 端连接</h3>
+              <ol>
+                <li>让 PICO 与采集机 Wi-Fi 处于同一局域网，并保持头显和双手柄唤醒。</li>
+                <li>打开 XRoboToolkit，进入 <code>Data &amp; Control → PC Service → Enter</code>。</li>
+                <li>填写采集机的 Wi-Fi IPv4，例如 <code>192.168.120.115</code>；不要填写 <code>127.0.0.1</code> 或 Marvin 地址。</li>
+                <li>确认 <code>Network=WORKING</code>，打开 <code>Head</code>、<code>Controller</code> 和 <code>Send</code>，关闭 <code>Switch w/ A Button</code>。</li>
+                <li>返回 UI，确认 PICO 显示“已连接”；异常时检查 <code>63901</code>、<code>60061</code> 和实时监督提示。</li>
+              </ol>
+            </section>
+            <section>
+              <h3><span>02</span>UI 采集操作</h3>
+              <ol>
+                <li>在“采集作业”确认 PICO、机械臂、夹爪和相机状态，完成现场安全检查。</li>
+                <li>填写任务名称、采集员和机器人型号，按需选择视觉、分辨率及最长时长。</li>
+                <li>焦点位于采集配置时按 <code>Enter</code>，或点击“开始采集”。</li>
+                <li>通过实时预览和错误信息监督采集；点击“停止并保存”或按 <code>Esc</code> 安全收尾。</li>
+                <li>在“数据集”搜索、查看、导出或将 Episode 移入回收站。</li>
+              </ol>
+            </section>
+          </div>
+          <p class="usage-warning"><b>安全提示</b> UI 停止不是急停；出现异常运动时立即使用物理急停。</p>
+        </article>
+      </section>
+
+      <section class="view" id="view-devices">
+        <div class="page-heading"><div><p class="eyebrow">DEVICE TOPOLOGY</p><h1>设备管理</h1><p>采集链路、发布频率与进程状态一览。</p></div><button class="button secondary" id="deviceCheck"><svg><use href="#i-signal"/></svg>全链路自检</button></div>
+        <div class="device-summary"><span><i></i><b id="deviceOnlineCount">0 / 6</b> 端口就绪</span><span><i></i><b id="topicHealthCount">0 / 6</b> 被动监测正常</span><span><i></i><b id="processHealthCount">0 / 3</b> 端口组正常</span></div>
+        <article class="panel topology">
+          <div class="topology-head"><div><span class="section-kicker">ROS 2 HUMBLE</span><h2>实时数据拓扑</h2></div><span class="updated">最后更新 <b id="lastUpdated">刚刚</b></span></div>
+          <div class="flow-map">
+            <div class="flow-column sources"><p>数据源</p><div class="node"><span class="stream-symbol pico">P</span><b>PICO XR</b><small>120 Hz</small></div><div class="node"><span class="stream-symbol tactile">L</span><b>DAS Left</b><small>30 Hz</small></div><div class="node"><span class="stream-symbol tactile">R</span><b>DAS Right</b><small>30 Hz</small></div><div class="node"><span class="stream-symbol arm">M</span><b>Marvin</b><small>50 Hz</small></div></div>
+            <div class="flow-lines"><span></span><span></span><span></span><span></span></div>
+            <div class="flow-column bus"><p>消息总线</p><div class="node featured"><span class="ros-mark">R2</span><b>ROS 2 Topics</b><small>12 streams</small></div></div>
+            <div class="flow-lines right"><span></span><span></span><span></span></div>
+            <div class="flow-column sinks"><p>处理与存储</p><div class="node"><span class="stream-symbol vision">S</span><b>State MCAP</b><small>18.6 MB/s</small></div><div class="node"><span class="stream-symbol vision">V</span><b>Vision MCAP</b><small>22.6 MB/s</small></div><div class="node"><span class="stream-symbol arm">Q</span><b>Diagnostics</b><small>10 Hz</small></div></div>
+          </div>
+        </article>
+        <div class="device-card-grid">
+          <article class="panel device-card pico-card"><span class="device-card-icon">P</span><div><h3>PICO 4 Enterprise</h3><p id="picoService">Robotics Service · 未连接</p></div><span class="health offline" id="picoHealth">离线</span><dl><div><dt>监听端口</dt><dd id="picoRate">—</dd></div><div><dt>数据帧</dt><dd id="picoLastFrame">未监测</dd></div><div><dt>连接依据</dt><dd id="picoLatency">—</dd></div></dl><button class="button secondary reconnect-button" id="reconnectPico"><svg><use href="#i-refresh"/></svg>重新连接 PICO</button></article>
+          <article class="panel device-card"><span class="device-card-icon">M</span><div><h3>Marvin M6S 双臂</h3><p>192.168.1.190 · ICMP</p></div><span class="health offline" id="marvinDeviceHealth">离线</span><dl><div><dt>Ping 状态</dt><dd id="marvinControlRate">—</dd></div><div><dt>目标地址</dt><dd id="marvinStateAge">192.168.1.190</dd></div><div><dt>监测方式</dt><dd id="marvinFeedback">Ping 检测</dd></div></dl></article>
+          <article class="panel device-card"><span class="device-card-icon">D</span><div><h3>DAS 夹爪与相机</h3><p id="dasDevicePath">/dev/ttyFingerLeft · /dev/ttyFingerRight</p></div><span class="health offline" id="dasDeviceHealth">离线</span><dl><div><dt>夹爪串口</dt><dd id="dasFeedbackRate">—</dd></div><div><dt>左相机节点</dt><dd id="dasLeftCamera">未识别</dd></div><div><dt>右相机节点</dt><dd id="dasRightCamera">未识别</dd></div></dl></article>
+        </div>
+      </section>
+
+      <section class="view" id="view-calibration">
+        <div class="page-heading"><div><p class="eyebrow">CALIBRATION</p><h1>标定中心</h1><p>所有采集使用可追溯、带校验和的参数快照。</p></div><button class="button primary small">运行标定</button></div>
+        <div class="calibration-grid">
+          <article class="panel calibration-card"><div class="cal-icon">A/A</div><span class="table-status passed">有效</span><h2>Marvin 空间比例</h2><p>控制器位移到机械臂工作空间的在线比例。</p><dl><div><dt>Scale factor</dt><dd>0.50</dd></div><div><dt>更新时间</dt><dd>今天 09:24</dd></div><div><dt>校验和</dt><dd>666b...318</dd></div></dl><button class="button secondary">查看参数</button></article>
+          <article class="panel calibration-card"><div class="cal-icon">L</div><span class="table-status passed">有效</span><h2>DAS 左手行程</h2><p>编码器距离、启动安全位置与相机设备。</p><dl><div><dt>安全位置</dt><dd>0.050 m</dd></div><div><dt>设备</dt><dd>/dev/ttyUSB0</dd></div><div><dt>校验和</dt><dd>617f...778</dd></div></dl><button class="button secondary">查看参数</button></article>
+          <article class="panel calibration-card"><div class="cal-icon">R</div><span class="table-status passed">有效</span><h2>DAS 右手行程</h2><p>编码器距离、启动安全位置与相机设备。</p><dl><div><dt>安全位置</dt><dd>0.050 m</dd></div><div><dt>设备</dt><dd>/dev/ttyUSB1</dd></div><div><dt>校验和</dt><dd>617f...778</dd></div></dl><button class="button secondary">查看参数</button></article>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <dialog id="episodeDialog" class="dialog detail-dialog">
+    <form method="dialog">
+      <button class="dialog-close" value="cancel" aria-label="关闭"><svg><use href="#i-x"/></svg></button>
+      <p class="eyebrow">EPISODE DETAIL</p><h2 id="detailId">episode_131937_81295016</h2><span class="table-status passed">校验通过</span>
+      <div class="detail-score"><div class="donut small"><span><b>99</b><small>.2</small></span></div><div><b>数据质量优秀</b><p>所有必需话题完整，时间戳连续。</p></div></div>
+      <dl class="detail-list"><div><dt>任务</dt><dd>pick_and_place</dd></div><div><dt>采集员</dt><dd>zxcx</dd></div><div><dt>机器人</dt><dd>M6S-Lite-CCS-680-B</dd></div><div><dt>数据模态</dt><dd>视觉 · 触觉 · 关节 · PICO</dd></div><div><dt>对齐时钟</dt><dd>CLOCK_MONOTONIC</dd></div><div><dt>数据文件</dt><dd>data/*.mcap · 5.2 GB</dd></div></dl>
+      <div class="dialog-actions split"><button class="button danger" type="button" id="deleteFromDetail"><svg><use href="#i-trash"/></svg>删除</button><span></span><button class="button secondary" type="button" id="openDirectoryFromDetail"><svg><use href="#i-folder"/></svg>打开目录</button><button class="button primary">进入复核</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="deleteDialog" class="dialog delete-dialog">
+    <form method="dialog">
+      <button class="dialog-close" value="cancel" aria-label="关闭"><svg><use href="#i-x"/></svg></button>
+      <span class="dialog-icon danger-icon"><svg><use href="#i-trash"/></svg></span>
+      <p class="eyebrow">DELETE EPISODE</p><h2>删除这段采集？</h2>
+      <p class="dialog-lead">请确认后继续。Episode 将移入站点回收站，不会立即永久擦除。</p>
+      <div class="delete-target"><span>即将删除</span><b id="deleteTarget">episode_131937_81295016</b><small>关联的 MCAP、视频、元数据和标定快照将一起移动</small></div>
+      <div class="dialog-actions"><button class="button secondary" value="cancel">取消</button><button class="button danger solid" id="confirmDelete" value="delete"><svg><use href="#i-trash"/></svg>移入回收站</button></div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status"><svg><use href="#i-check"/></svg><span>链路检测完成，全部正常</span></div>
+  <script src="app.js"></script>
+</body>
+</html>

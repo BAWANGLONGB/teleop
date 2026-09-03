@@ -9,6 +9,9 @@ import time
 from pathlib import Path
 
 
+PREVIEW_FPS = 30
+
+
 def parse_resolution(value):
     try:
         width, height = (int(item) for item in value.lower().split("x", 1))
@@ -37,6 +40,15 @@ def is_jpeg(payload):
     )
 
 
+def write_preview_file(path, payload):
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_bytes(payload)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 class NativeMjpegWriter:
     def __init__(
         self,
@@ -47,6 +59,7 @@ class NativeMjpegWriter:
         output,
         storage_config,
         ready_file=None,
+        preview_file=None,
     ):
         try:
             import gi
@@ -73,6 +86,11 @@ class NativeMjpegWriter:
         self.ready_file = (
             None if ready_file is None else Path(ready_file).expanduser().resolve()
         )
+        self.preview_file = (
+            None if preview_file is None else Path(preview_file).expanduser().resolve()
+        )
+        self._next_preview_ns = 0
+        self._preview_disabled = False
         if self.output.exists():
             raise FileExistsError(f"camera bag already exists: {self.output}")
         if not self.storage_config.is_file():
@@ -118,6 +136,20 @@ class NativeMjpegWriter:
             )
         )
 
+    def _write_preview(self, payload, steady_ns):
+        if (
+            self.preview_file is None
+            or self._preview_disabled
+            or steady_ns < self._next_preview_ns
+        ):
+            return
+        self._next_preview_ns = steady_ns + 1_000_000_000 // PREVIEW_FPS
+        try:
+            write_preview_file(self.preview_file, payload)
+        except OSError as error:
+            self._preview_disabled = True
+            print(f"Preview disabled for {self.side}: {error}", flush=True)
+
     def request_stop(self, _signal_number=None, _frame=None):
         self._stop_event.set()
 
@@ -161,6 +193,7 @@ class NativeMjpegWriter:
             buffer.unmap(map_info)
         if not is_jpeg(payload):
             raise RuntimeError("camera returned a non-JPEG payload")
+        self._write_preview(payload, receive_steady_ns)
 
         message = self._message_type()
         message.image.header.stamp.sec, message.image.header.stamp.nanosec = divmod(
@@ -227,6 +260,11 @@ class NativeMjpegWriter:
             and not self.output.exists()
         ):
             self._temporary_output.replace(self.output)
+        if self.preview_file is not None:
+            try:
+                self.preview_file.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def main(arguments=None):
@@ -238,6 +276,7 @@ def main(arguments=None):
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--storage-config", required=True, type=Path)
     parser.add_argument("--ready-file", type=Path)
+    parser.add_argument("--preview-file", type=Path)
     parsed = parser.parse_args(arguments)
 
     writer = NativeMjpegWriter(
@@ -248,6 +287,7 @@ def main(arguments=None):
         parsed.output,
         parsed.storage_config,
         parsed.ready_file,
+        parsed.preview_file,
     )
     previous_handlers = {
         signal_number: signal.signal(signal_number, writer.request_stop)

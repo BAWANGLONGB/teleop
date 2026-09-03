@@ -143,6 +143,10 @@ SDK 虚拟环境中，否则 `FingerSystem` 无法被当前进程加载。
 `startup_distance_m`。示例默认最小距离为 `0.000 m`，但启动仍使用安全的
 `0.050 m`，不会在连接时主动闭合到零。DAS 只在显式提供以下两个参数时启用：
 
+相机支持 `640x480` 和 `1600x1296`。实测时间校正分别为：`640x480` 左侧
+`24 ms`、右侧 `25 ms`；`1600x1296` 左侧 `22 ms`、右侧 `24 ms`。其他分辨率
+未标定时在 episode 元数据中记录为 `null` 且不校正，待后续数采数据计算后再写回配置。
+
 ```bash
 unset LD_PRELOAD
 python scripts/hardware/teleop_marvin_hardware.py \
@@ -258,7 +262,8 @@ python scripts/data/record_episode.py \
 
 `header.stamp` 是采集机墙钟，`receive_steady_ns` 是不受校时影响的本机单调时钟，
 `source_timestamp_ns` 保存设备原始时间戳；设备不提供硬件时间时该字段为 `0`。
-离线统一使用消息内的 `receive_steady_ns` 对齐，禁止控制线程等待多传感器凑齐一帧。
+离线统一使用消息内的 `receive_steady_ns` 对齐，并扣除配置的相机延迟校正；禁止控制
+线程等待多传感器凑齐一帧。
 相机原生 MJPEG 不经过解码、重编码或 ROS2 DDS，独立进程直接写入 MCAP。
 
 默认输出为 `dataset/session_<date>/episode_<time>_<id>/`，在线阶段写入 `state/`、
