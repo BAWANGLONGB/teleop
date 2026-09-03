@@ -366,24 +366,26 @@ XR stale 保持周期仍写日志，但 XR 字段为 `null`。回放读取器忽
 采集不再把不同频率的数据拼成 `/teleop/sample`。各数据源按自身节拍发布：
 
 ```text
-PICO SDK 独立进程 → /raw/pico/frame → 实机控制订阅
-Marvin SDK 回调/轮询 → /raw/marvin/joint_state
-控制实际下发       → /command/marvin/joint_target、/command/das/target
-DAS SDK 回调        → /raw/das/{side}/state、tactile、image
-                              ↓
-                  state/ / vision/ MCAP
-                              ↓
-                 离线时间对齐与完整性校验
+PICO SDK 独立进程     → /raw/pico/frame → 实机控制订阅
+Marvin SDK 回调/轮询   → /raw/marvin/joint_state
+控制实际下发          → /command/marvin/joint_target、/command/das/target
+左右 DAS 串口独立进程  → /raw/das/{side}/state、tactile
+左右 V4L2 独立进程     → 原生 MJPEG 直接写 vision_{side}/ MCAP
+                                      ↓
+                         state/ + vision_left/ + vision_right/
+                                      ↓
+                   receive_steady_ns 对齐、TCP FK、完整性校验 → data/
 ```
 
 每个消息流包含独立 `sequence_id`。`header.stamp` 记录采集机墙钟，
 `receive_steady_ns` 记录接收点单调时钟；只有设备提供原始时钟时才填写
-`source_timestamp_ns`，否则为 `0`。因此跨设备对齐以墙钟为公共时间轴，以单调时钟
-检测本机回退和延迟，以序号检测丢帧，不在在线控制线程内等待同步。
+`source_timestamp_ns`，否则为 `0`。后处理从状态消息估计单调时钟到墙钟的偏移，并以
+各消息的 `receive_steady_ns` 生成统一 MCAP 时间轴；序号用于检测丢帧，在线控制线程
+不等待同步。
 
-控制状态、命令、编码器、触觉和诊断写入 `state/` MCAP bag；左右原始 BGR 图像
-写入 `vision/` MCAP bag。两路 recorder 独立缓存和压缩，视觉吞吐异常不会阻塞
-控制状态记录。
+控制状态、命令、编码器、触觉和诊断写入 `state/`；左右相机分别在独立进程中把
+V4L2 原生 MJPEG 写入 `vision_left/`、`vision_right/`，不经过解码、重编码和 DDS。
+录制结束后合并为单一 `data/` MCAP，并由关节反馈/目标计算左右 TCP xyz+rpy。
 episode 的 `metadata.json` 在启动/结束时原子更新，退出后生成包含话题频率、时间戳
 回退、序号缺口和文件 SHA-256 的 `manifest.json`。JSONL 只保留为控制调试日志。
 

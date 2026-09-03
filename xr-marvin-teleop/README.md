@@ -140,7 +140,8 @@ SDK 虚拟环境中，否则 `FingerSystem` 无法被当前进程加载。
 
 复制 [`config/das_gripper.example.json`](config/das_gripper.example.json)，按实际
 空载行程修改 `closed_distance_m`、`open_distance_m` 和区间内的安全
-`startup_distance_m`。DAS 只在显式提供以下两个参数时启用：
+`startup_distance_m`。示例默认最小距离为 `0.000 m`，但启动仍使用安全的
+`0.050 m`，不会在连接时主动闭合到零。DAS 只在显式提供以下两个参数时启用：
 
 ```bash
 unset LD_PRELOAD
@@ -202,8 +203,8 @@ python scripts/data/run_collection.py \
   --das-sdk-root /home/zxcx/TeleOp/gen_finger_con_python_sdk_release
 ```
 
-它会依次等待有效 PICO 帧和 DAS 编码器反馈，再启动 recorder 和 Marvin；并固定
-Marvin、PICO、DAS、recorder 的 CPU 亲和性，将 recorder 设为 `nice +10`。按一次
+它会依次等待有效 PICO 帧、左右 DAS 编码器反馈和左右相机首帧，再启动 Marvin；并固定
+Marvin、PICO、左右 DAS、recorder 的 CPU 亲和性，将 recorder 设为 `nice +10`。按一次
 `Ctrl+C` 后依次停止 Marvin、DAS、完成 MCAP/manifest、停止 PICO。Pico PC Service
 仍需提前独立启动。完整 SOP 见[日常操作说明](docs/操作指南.md)。如需分进程排障，
 按以下顺序启动。先发布 PICO：
@@ -212,20 +213,28 @@ Marvin、PICO、DAS、recorder 的 CPU 亲和性，将 recorder 设为 `nice +10
 python scripts/data/publish_pico.py
 ```
 
-再启动独立 DAS 数据源：
+再在两个终端分别启动左右 DAS 数据源：
 
 ```bash
 python scripts/data/publish_das.py \
+  --side left \
+  --config config/das_gripper.example.json \
+  --sdk-root /home/zxcx/TeleOp/gen_finger_con_python_sdk_release
+
+# 另一个终端
+python scripts/data/publish_das.py \
+  --side right \
   --config config/das_gripper.example.json \
   --sdk-root /home/zxcx/TeleOp/gen_finger_con_python_sdk_release
 ```
 
-随后创建 episode，并把状态/触觉和原始图像分别写入两个 MCAP：
+随后创建 episode；recorder 会为左右相机各启动一个原生 MJPEG 写盘进程：
 
 ```bash
 python scripts/data/record_episode.py \
   --task pick_and_place \
   --operator zxcx \
+  --das-config config/das_gripper.example.json \
   --calibration logs/marvin_scale_calibration.json \
   --calibration config/das_gripper.example.json
 ```
@@ -244,23 +253,34 @@ python scripts/data/record_episode.py \
 | Marvin | `/raw/marvin/joint_state`、`/command/marvin/joint_target` |
 | DAS | `/raw/das/{left,right}/state`、`/command/das/target` |
 | 触觉 | `/raw/das/{left,right}/tactile` |
-| 图像 | `/raw/das/{left,right}/image` |
+| 图像 | `/raw/das/{left,right}/image/compressed` |
 | 运行状态 | `/diagnostics`、`/episode/state`、`/episode/event` |
 
 `header.stamp` 是采集机墙钟，`receive_steady_ns` 是不受校时影响的本机单调时钟，
 `source_timestamp_ns` 保存设备原始时间戳；设备不提供硬件时间时该字段为 `0`。
-离线按时间戳对齐，禁止控制线程等待多传感器凑齐一帧。图像保持原始
-`sensor_msgs/Image`，由 MCAP Zstd 压缩。
+离线统一使用消息内的 `receive_steady_ns` 对齐，禁止控制线程等待多传感器凑齐一帧。
+相机原生 MJPEG 不经过解码、重编码或 ROS2 DDS，独立进程直接写入 MCAP。
 
-默认输出为 `dataset/session_<date>/episode_<time>_<id>/`，其中 `state/` 与
-`vision/` 是独立 bag，`calibration/` 保存标定配置快照，`metadata.json` 保存任务、
-操作者、代码版本和标定哈希，`manifest.json` 保存消息统计、时序/序号异常和文件
-SHA-256。录制结束自动校验，也可重新执行：
+默认输出为 `dataset/session_<date>/episode_<time>_<id>/`，在线阶段写入 `state/`、
+`vision_left/`、`vision_right/` 三个隔离 bag；结束后自动按统一时间轴合并为完整
+`data/` MCAP，并补充左右反馈/控制 TCP 6D pose。`calibration/` 保存标定快照，
+`metadata.json` 保存任务、代码版本和对齐统计，`manifest.json` 保存完整性检查与文件
+SHA-256。也可重新执行：
 
 ```bash
 python scripts/data/validate_episode.py \
   dataset/session_<date>/episode_<time>_<id>
 ```
+
+生成人工审阅视频：
+
+```bash
+/usr/bin/python3 scripts/data/review_episode.py \
+  dataset/session_<date>/episode_<time>_<id>
+```
+
+输出的 `review.mp4` 包含左右画面、机械臂关节反馈/目标、TCP pose、夹爪反馈/目标及
+各状态与图像的时间差。
 
 JSONL 继续作为控制调试日志，不作为训练数据的主格式。
 

@@ -14,6 +14,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DasState.msg"
   "msg/TactileFrame.msg"
   "msg/ImageFrame.msg"
+  "msg/CompressedImageFrame.msg"
+  "msg/TcpPose.msg"
   DEPENDENCIES sensor_msgs std_msgs
 )
 

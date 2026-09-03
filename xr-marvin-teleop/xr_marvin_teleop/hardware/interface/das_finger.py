@@ -12,7 +12,9 @@ from pathlib import Path
 import numpy as np
 
 
+MIN_DAS_DISTANCE_M = 0.0
 MAX_DAS_DISTANCE_M = 0.2
+ENCODER_ZERO_TOLERANCE_M = 0.001
 DAS_ENCODER_CALIBRATION_CODE = -66.66
 ARM_NAMES = ("left", "right")
 
@@ -48,11 +50,15 @@ class DASFingerConfiguration:
         if (
             not np.isfinite(closed_distance_m)
             or not np.isfinite(open_distance_m)
-            or not 0.0 <= closed_distance_m < open_distance_m <= MAX_DAS_DISTANCE_M
+            or not MIN_DAS_DISTANCE_M
+            <= closed_distance_m
+            < open_distance_m
+            <= MAX_DAS_DISTANCE_M
         ):
             raise ValueError(
                 "DAS distances must satisfy "
-                f"0 <= closed < open <= {MAX_DAS_DISTANCE_M:g} m"
+                f"{MIN_DAS_DISTANCE_M:g} <= closed < open "
+                f"<= {MAX_DAS_DISTANCE_M:g} m"
             )
         object.__setattr__(self, "closed_distance_m", closed_distance_m)
         object.__setattr__(self, "open_distance_m", open_distance_m)
@@ -134,7 +140,11 @@ def _decode_encoder_value(record_data):
             "DAS encoder requires initial calibration (returned -66.66); "
             "clear the gripper and run the SDK calibration startup first"
         )
-    if not np.isfinite(value) or not 0.0 <= value <= MAX_DAS_DISTANCE_M:
+    if not np.isfinite(value):
+        raise ValueError(f"invalid DAS encoder distance: {value!r}")
+    if -ENCODER_ZERO_TOLERANCE_M <= value < MIN_DAS_DISTANCE_M:
+        return MIN_DAS_DISTANCE_M
+    if not MIN_DAS_DISTANCE_M <= value <= MAX_DAS_DISTANCE_M:
         raise ValueError(f"invalid DAS encoder distance: {value!r}")
     return float(value)
 
@@ -158,7 +168,9 @@ def closedness_to_das_distances(closedness, configurations):
             target = configuration.open_distance_m - value * (
                 configuration.open_distance_m - configuration.closed_distance_m
             )
-        targets.append(float(np.clip(target, 0.0, MAX_DAS_DISTANCE_M)))
+        targets.append(
+            float(np.clip(target, MIN_DAS_DISTANCE_M, MAX_DAS_DISTANCE_M))
+        )
     return tuple(targets)
 
 

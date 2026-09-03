@@ -39,6 +39,7 @@ from xr_marvin_teleop.hardware.interface.das_finger import (
     DASFingerAdapter,
     DASFingerConfiguration,
     _decode_encoder_value,
+    closedness_to_das_distances,
     load_das_finger_configurations,
 )
 from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
@@ -619,6 +620,21 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertAlmostEqual(
             _decode_encoder_value(struct.pack(">f", 0.05)), 0.05
         )
+        self.assertEqual(_decode_encoder_value(struct.pack(">f", -0.0005)), 0.0)
+        with self.assertRaisesRegex(ValueError, "invalid DAS encoder"):
+            _decode_encoder_value(struct.pack(">f", -0.01))
+        zero_closed = (
+            DASFingerConfiguration(
+                "/dev/left", "/dev/video-left", 0.0, 0.15
+            ),
+            DASFingerConfiguration(
+                "/dev/right", "/dev/video-right", 0.0, 0.15
+            ),
+        )
+        np.testing.assert_allclose(
+            closedness_to_das_distances((0.0, 1.0), zero_closed),
+            (0.15, 0.0),
+        )
         configurations = (
             DASFingerConfiguration(
                 "/dev/left",
@@ -1035,7 +1051,10 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertIn("--ros2", commands["hardware"])
         self.assertIn("--das-from-ros2", commands["hardware"])
         self.assertNotIn("--das-sdk-root", commands["hardware"])
-        self.assertIn("--sdk-root", commands["das"])
+        self.assertIn("--sdk-root", commands["das_left"])
+        self.assertIn("--side", commands["das_right"])
+        self.assertIn("--das-config", commands["recorder"])
+        self.assertIn("--ready-file", commands["recorder"])
         self.assertIn("--calibration", commands["recorder"])
         self.assertEqual(
             namespace["PROCESS_CPUS"]["hardware"], (2, 3, 18, 19)
@@ -1045,7 +1064,8 @@ class TestMarvinHardware(unittest.TestCase):
         results = namespace["_shutdown_processes"](
             {
                 "pico": object(),
-                "das": object(),
+                "das_left": object(),
+                "das_right": object(),
                 "recorder": object(),
                 "hardware": object(),
             },
@@ -1057,14 +1077,21 @@ class TestMarvinHardware(unittest.TestCase):
             calls,
             [
                 ("hardware", 15.0),
-                ("das", 10.0),
+                ("das_left", 10.0),
+                ("das_right", 10.0),
                 ("recorder", None),
                 ("pico", 10.0),
             ],
         )
         self.assertEqual(
             results,
-            {"hardware": 0, "das": 0, "recorder": 0, "pico": 0},
+            {
+                "hardware": 0,
+                "das_left": 0,
+                "das_right": 0,
+                "recorder": 0,
+                "pico": 0,
+            },
         )
 
     def test_optional_ik_nsp_is_initialized_and_angle_is_ramped(self):

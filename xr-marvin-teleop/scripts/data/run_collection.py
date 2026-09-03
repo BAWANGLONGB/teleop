@@ -25,7 +25,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROCESS_CPUS = {
     "hardware": (2, 3, 18, 19),
     "pico": (4, 20),
-    "das": (5, 6, 21, 22),
+    "das_left": (5, 21),
+    "das_right": (6, 22),
     "recorder": (*range(7, 16), *range(23, 32)),
 }
 
@@ -156,7 +157,11 @@ def _preflight(arguments):
     missing_devices = [
         path
         for config in configurations
-        for path in (config.serial_port, config.camera_device)
+        for path in (
+            (config.serial_port,)
+            if arguments.no_vision
+            else (config.serial_port, config.camera_device)
+        )
         if not Path(path).exists()
     ]
     if missing_devices:
@@ -183,6 +188,7 @@ def _preflight(arguments):
 
 def _build_commands(arguments):
     python = sys.executable
+    recorder_ready_file = _recorder_ready_file(arguments)
     calibrations = [arguments.das_config, arguments.scale_calibration_path]
     for path in arguments.calibration:
         if path not in calibrations:
@@ -198,6 +204,12 @@ def _build_commands(arguments):
         arguments.robot_model,
         "--output-root",
         str(arguments.output_root),
+        "--das-config",
+        str(arguments.das_config),
+        "--ready-file",
+        str(recorder_ready_file),
+        "--camera-startup-timeout",
+        str(arguments.startup_timeout),
     ]
     for path in calibrations:
         recorder.extend(("--calibration", str(path)))
@@ -256,22 +268,31 @@ def _build_commands(arguments):
         "--poll-hz",
         str(arguments.pico_poll_hz),
     ]
-    das = [
-        python,
-        str(PROJECT_ROOT / "scripts" / "data" / "publish_das.py"),
-        "--config",
-        str(arguments.das_config),
-        "--sdk-root",
-        str(arguments.das_sdk_root),
-        "--ready-timeout",
-        str(arguments.startup_timeout),
-    ]
+    das_commands = {
+        f"das_{side}": [
+            python,
+            str(PROJECT_ROOT / "scripts" / "data" / "publish_das.py"),
+            "--side",
+            side,
+            "--config",
+            str(arguments.das_config),
+            "--sdk-root",
+            str(arguments.das_sdk_root),
+            "--ready-timeout",
+            str(arguments.startup_timeout),
+        ]
+        for side in ("left", "right")
+    }
     return {
         "pico": pico,
-        "das": das,
+        **das_commands,
         "recorder": recorder,
         "hardware": hardware,
     }
+
+
+def _recorder_ready_file(arguments):
+    return Path(arguments.output_root) / f".recorder-ready-{os.getpid()}"
 
 
 def _start_process(name, command, cpus, nice=0):
@@ -337,18 +358,19 @@ def _wait_for_pico(process, timeout_seconds):
     raise TimeoutError("PICO produced no valid ROS2 frame before startup timeout")
 
 
-def _wait_for_das(process, configuration_path, timeout_seconds):
+def _wait_for_das(processes, configuration_path, timeout_seconds):
     deadline = time.monotonic() + timeout_seconds
     configurations = load_das_finger_configurations(configuration_path)
     with closing(
         RosDasClient(configurations, ready_timeout_seconds=timeout_seconds)
     ) as client:
         while time.monotonic() < deadline:
-            return_code = process.poll()
-            if return_code is not None:
-                raise RuntimeError(
-                    f"DAS source exited during startup with code {return_code}"
-                )
+            for name, process in processes.items():
+                return_code = process.poll()
+                if return_code is not None:
+                    raise RuntimeError(
+                        f"{name} source exited during startup with code {return_code}"
+                    )
             try:
                 client.connect(
                     timeout_seconds=min(0.5, deadline - time.monotonic())
@@ -364,15 +386,19 @@ def _wait_for_das(process, configuration_path, timeout_seconds):
     raise TimeoutError("DAS produced no valid ROS2 state before startup timeout")
 
 
-def _require_running(process, name, seconds=2.0):
-    deadline = time.monotonic() + seconds
+def _wait_for_recorder(process, ready_file, timeout_seconds):
+    deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         return_code = process.poll()
         if return_code is not None:
             raise RuntimeError(
-                f"{name} exited during startup with code {return_code}"
+                f"episode recorder exited during startup with code {return_code}"
             )
-        time.sleep(0.1)
+        if ready_file.is_file():
+            ready_file.unlink()
+            return
+        time.sleep(0.05)
+    raise TimeoutError("episode recorder did not become ready")
 
 
 def _signal_process(process, signal_number):
@@ -407,7 +433,8 @@ def _shutdown_processes(processes, stop_process=_stop_process):
     results = {}
     for name, timeout_seconds in (
         ("hardware", 15.0),
-        ("das", 10.0),
+        ("das_left", 10.0),
+        ("das_right", 10.0),
         ("recorder", None),
         ("pico", 10.0),
     ):
@@ -419,7 +446,13 @@ def _shutdown_processes(processes, stop_process=_stop_process):
 
 def _monitor(processes, stop_requested):
     while not stop_requested.is_set():
-        for name in ("hardware", "das", "recorder", "pico"):
+        for name in (
+            "hardware",
+            "das_left",
+            "das_right",
+            "recorder",
+            "pico",
+        ):
             return_code = processes[name].poll()
             if return_code is not None:
                 print(f"{name} exited with code {return_code}", flush=True)
@@ -456,29 +489,39 @@ def main(arguments=None):
             "PICO publisher", commands["pico"], cpu_sets["pico"]
         )
         _wait_for_pico(processes["pico"], parsed.startup_timeout)
-        processes["das"] = _start_process(
-            "DAS source", commands["das"], cpu_sets["das"]
-        )
+        for side in ("left", "right"):
+            name = f"das_{side}"
+            processes[name] = _start_process(
+                f"DAS {side} source", commands[name], cpu_sets[name]
+            )
         _wait_for_das(
-            processes["das"], parsed.das_config, parsed.startup_timeout
+            {name: processes[name] for name in ("das_left", "das_right")},
+            parsed.das_config,
+            parsed.startup_timeout,
         )
+        _recorder_ready_file(parsed).unlink(missing_ok=True)
         processes["recorder"] = _start_process(
             "episode recorder",
             commands["recorder"],
             cpu_sets["recorder"],
             nice=10,
         )
-        _require_running(processes["recorder"], "episode recorder")
+        _wait_for_recorder(
+            processes["recorder"],
+            _recorder_ready_file(parsed),
+            parsed.startup_timeout + 2.0,
+        )
         if processes["pico"].poll() is not None:
             raise RuntimeError("PICO publisher stopped before hardware startup")
-        if processes["das"].poll() is not None:
-            raise RuntimeError("DAS source stopped before hardware startup")
+        for name in ("das_left", "das_right"):
+            if processes[name].poll() is not None:
+                raise RuntimeError(f"{name} source stopped before hardware startup")
         processes["hardware"] = _start_process(
             "Marvin hardware", commands["hardware"], cpu_sets["hardware"]
         )
         print("Collection active; press Ctrl-C once to stop safely", flush=True)
         exited_name, return_code = _monitor(processes, stop_requested)
-        if exited_name in ("pico", "das"):
+        if exited_name in ("pico", "das_left", "das_right"):
             exit_code = return_code or 1
         else:
             exit_code = 0 if return_code == 0 else 1
@@ -487,6 +530,7 @@ def main(arguments=None):
         exit_code = 1
     finally:
         shutdown_results = _shutdown_processes(processes)
+        _recorder_ready_file(parsed).unlink(missing_ok=True)
         for signal_number, handler in previous_handlers.items():
             signal.signal(signal_number, handler)
         if any(return_code != 0 for return_code in shutdown_results.values()):

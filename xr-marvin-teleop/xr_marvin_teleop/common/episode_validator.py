@@ -14,7 +14,7 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def inspect_bag(path, storage_id="mcap"):
+def inspect_bag(path, storage_id="mcap", expected_steady_offset_ns=None):
     try:
         import rosbag2_py
         from rclpy.serialization import deserialize_message
@@ -41,6 +41,7 @@ def inspect_bag(path, storage_id="mcap"):
             "bag_time_regressions": 0,
             "source_time_regressions": 0,
             "sequence_gaps": 0,
+            "steady_alignment_errors": 0,
         }
         for topic, type_name in topic_types.items()
     }
@@ -69,6 +70,19 @@ def inspect_bag(path, storage_id="mcap"):
             if source_time < last_source_time.get(topic, source_time):
                 item["source_time_regressions"] += 1
             last_source_time[topic] = source_time
+        steady_time = int(
+            getattr(
+                message,
+                "receive_steady_ns",
+                getattr(message, "issue_steady_ns", 0),
+            )
+        )
+        if (
+            steady_time
+            and expected_steady_offset_ns is not None
+            and bag_time_ns != steady_time + expected_steady_offset_ns
+        ):
+            item["steady_alignment_errors"] += 1
         sequence = int(getattr(message, "sequence_id", 0))
         if sequence:
             previous = last_sequence.get(topic)
@@ -99,17 +113,40 @@ def validate_episode(
     ),
 ):
     episode_directory = Path(episode_directory).resolve()
+    metadata_path = episode_directory / "metadata.json"
+    metadata = (
+        json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata_path.is_file()
+        else {}
+    )
+    processed_bag = metadata.get("processed_bag")
+    steady_offset_ns = (
+        metadata.get("postprocessing", {})
+        .get("alignment", {})
+        .get("steady_to_wall_offset_ns")
+    )
     bags = {}
     errors = []
     degraded = []
-    for bag_name in ("state", "vision"):
+    declared_bags = metadata.get("bags")
+    bag_names = list(declared_bags or ("state", "vision"))
+    if processed_bag and processed_bag not in bag_names:
+        bag_names.append(processed_bag)
+    elif not processed_bag and (episode_directory / "data").exists():
+        bag_names.append("data")
+    for bag_name in bag_names:
         bag_path = episode_directory / bag_name
         if not bag_path.exists():
-            if bag_name == "state":
-                errors.append("state bag is missing")
+            if bag_name == "state" or declared_bags or bag_name == processed_bag:
+                errors.append(f"{bag_name} bag is missing")
             continue
         try:
-            bags[bag_name] = inspect_bag(bag_path)
+            bags[bag_name] = inspect_bag(
+                bag_path,
+                expected_steady_offset_ns=(
+                    steady_offset_ns if bag_name == processed_bag else None
+                ),
+            )
         except Exception as error:
             errors.append(f"{bag_name} bag unreadable: {error}")
     state_topics = bags.get("state", {})
@@ -117,16 +154,40 @@ def validate_episode(
         if state_topics.get(topic, {}).get("count", 0) == 0:
             errors.append(f"required topic has no messages: {topic}")
     vision_topics = bags.get("vision")
+    processed_vision_topics = []
     if vision_topics is not None:
         for topic in ("/raw/das/left/image", "/raw/das/right/image"):
             if vision_topics.get(topic, {}).get("count", 0) == 0:
                 errors.append(f"required vision topic has no messages: {topic}")
+            processed_vision_topics.append(topic)
+    for side in ("left", "right"):
+        bag_name = f"vision_{side}"
+        if bag_name not in bags:
+            continue
+        topic = f"/raw/das/{side}/image/compressed"
+        if bags[bag_name].get(topic, {}).get("count", 0) == 0:
+            errors.append(f"required vision topic has no messages: {topic}")
+        processed_vision_topics.append(topic)
+    if processed_bag:
+        data_topics = bags.get(processed_bag, {})
+        processed_required_topics = [
+            *required_topics,
+            "/raw/marvin/left/tcp_pose",
+            "/raw/marvin/right/tcp_pose",
+            "/command/marvin/left/tcp_target",
+            "/command/marvin/right/tcp_target",
+        ]
+        processed_required_topics.extend(processed_vision_topics)
+        for topic in processed_required_topics:
+            if data_topics.get(topic, {}).get("count", 0) == 0:
+                errors.append(f"processed topic has no messages: {topic}")
     for bag_name, topics in bags.items():
         for topic, item in topics.items():
             if (
                 item["bag_time_regressions"]
                 or item["source_time_regressions"]
                 or item["sequence_gaps"]
+                or item.get("steady_alignment_errors", 0)
             ):
                 degraded.append(f"{bag_name}:{topic}")
     files = {

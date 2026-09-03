@@ -25,9 +25,12 @@ xr-marvin-teleop/
 │   └── meshes/
 ├── scripts/
 │   ├── data/
+│   │   ├── capture_das_mjpeg.py
+│   │   ├── postprocess_episode.py
 │   │   ├── publish_das.py
 │   │   ├── publish_pico.py
 │   │   ├── record_episode.py
+│   │   ├── review_episode.py
 │   │   ├── run_collection.py
 │   │   └── validate_episode.py
 │   ├── hardware/
@@ -36,9 +39,11 @@ xr-marvin-teleop/
 │       ├── teleop_marvin_mujoco.py
 │       └── replay_marvin_log.py
 ├── tests/
+│   ├── test_episode_postprocessor.py
 │   └── test_marvin_hardware.py
 └── xr_marvin_teleop/
     ├── common/
+    │   ├── episode_postprocessor.py
     │   ├── episode_validator.py
     │   ├── marvin_postures.py
     │   ├── marvin_scale_calibration.py
@@ -78,11 +83,12 @@ xr-marvin-teleop/
 | `ros/das_client.py` | 订阅独立 DAS 状态，并通过 ROS2 下发闭合度命令 |
 | `ros/pico_client.py` | 订阅独立 PICO 原始流并提供与 `XrClient` 相同的控制快照接口 |
 | `ros/telemetry_bridge.py` | 以独立 critical/image 线程有界发布状态、命令、触觉、原始图像和诊断 |
+| `common/episode_postprocessor.py` | 合并在线 MCAP 分片，按单调时钟对齐并由关节流生成 TCP 6D pose |
 | `common/episode_validator.py` | 离线检查 MCAP 话题、频率、时间回退、序号缺口和文件哈希 |
 | `ros2_ws/src/teleop_msgs` | 各原始数据流和命令的 ROS2 消息定义 |
 | `simulation/marvin_mujoco_adapter.py` | 用 MuJoCo 实现与硬件适配器相同的最小控制接口 |
 | `scripts/hardware/...` | 实机确认参数、DAS 独立标定、依赖组装和启动入口 |
-| `scripts/data/...` | 单命令 supervisor、PICO/DAS 独立发布、双 MCAP 录制和离线校验入口 |
+| `scripts/data/...` | supervisor、PICO/DAS 发布、原生 MJPEG 写盘、完整 MCAP 后处理与校验入口 |
 | `scripts/simulation/teleop_...` | PICO → MuJoCo 组装和启动入口 |
 | `scripts/simulation/replay_...` | JSONL command/feedback 回放入口 |
 | `tests/test_marvin_hardware.py` | 合成 XR、真实厂家 IK、SDK mock 和 headless MuJoCo 回归 |
