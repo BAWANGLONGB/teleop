@@ -47,6 +47,7 @@ try {
     { sections: 2, pico: true, enter: true },
   );
   await evaluate('renderEpisodes([{id:"episode_131937_81295016",task:"pick_and_place",operator:"zxcx",robot_model:"M6S-Lite-CCS-680-B",status:"degraded",duration_seconds:115,size_bytes:5583457485,created_at:"2026-09-03T13:19:00+08:00",modalities:["关节","PICO","触觉","视觉"]}])');
+  assert.equal(await evaluate('document.querySelector("#view-datasets thead").textContent.includes("状态")'), false);
 
   assert.deepEqual(
     await evaluate('document.querySelector(".episode-select").click();({selected:exportCount.textContent,enabled:!exportMcap.disabled,detail:episodeDialog.open})'),

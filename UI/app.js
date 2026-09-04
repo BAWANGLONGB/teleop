@@ -336,11 +336,10 @@ const episodeStates = {
 
 function renderEpisodes(episodes) {
   episodeRecords = episodes;
-  const empty = '<tr><td colspan="7">暂无采集数据</td></tr>';
+  const empty = '<tr><td colspan="6">暂无采集数据</td></tr>';
   const rows = episodes.map((episode) => {
-    const state = episodeStates[episode.status] || [episode.status, "review"];
     const date = episode.created_at ? new Date(episode.created_at).toLocaleString("zh-CN", { hour12: false }).replaceAll("/", "-") : "—";
-    return `<tr data-episode="${escapeHTML(episode.id)}"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 ${escapeHTML(episode.id)}"><b>EP · ${escapeHTML(episode.id.slice(-8))}</b></label></td><td>${escapeHTML(episode.task)}</td><td>${escapeHTML(date)}</td><td>${episode.modalities.map((item) => `<span class="modality">${escapeHTML(item)}</span>`).join("")}</td><td>${formatDuration(episode.duration_seconds)}</td><td><span class="table-status ${state[1]}">${escapeHTML(state[0])}</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>`;
+    return `<tr data-episode="${escapeHTML(episode.id)}"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 ${escapeHTML(episode.id)}"><b>EP · ${escapeHTML(episode.id.slice(-8))}</b></label></td><td>${escapeHTML(episode.task)}</td><td>${escapeHTML(date)}</td><td>${episode.modalities.map((item) => `<span class="modality">${escapeHTML(item)}</span>`).join("")}</td><td>${formatDuration(episode.duration_seconds)}</td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>`;
   });
   $("#datasetRows").innerHTML = rows.join("") || empty;
   $("#recentEpisodeRows").innerHTML = episodes.slice(0, 3).map((episode) => {
@@ -348,7 +347,7 @@ function renderEpisodes(episodes) {
     const date = episode.created_at ? new Date(episode.created_at).toLocaleString("zh-CN", { hour12: false }).replaceAll("/", "-") : "—";
     const operator = String(episode.operator ?? "—");
     return `<tr data-episode="${escapeHTML(episode.id)}"><td><b>EP · ${escapeHTML(episode.id.slice(-8))}</b><small>${escapeHTML(date)}</small></td><td>${escapeHTML(episode.task)}</td><td><span class="mini-avatar">${escapeHTML(operator.slice(0, 1).toUpperCase())}</span>${escapeHTML(operator)}</td><td>${formatDuration(episode.duration_seconds)}</td><td>${formatSize(episode.size_bytes)}</td><td><span class="table-status ${state[1]}">${escapeHTML(state[0])}</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>`;
-  }).join("") || empty;
+  }).join("") || '<tr><td colspan="7">暂无采集数据</td></tr>';
   $("#datasetCount").textContent = episodes.length;
   const bytes = episodes.reduce((total, item) => total + item.size_bytes, 0);
   $("#datasetSummary").textContent = `共 ${episodes.length} 段 · ${formatSize(bytes)}`;
