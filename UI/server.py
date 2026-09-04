@@ -165,9 +165,6 @@ def episode_record(path):
     duration = max(0, (ended - started) // 1_000_000_000) if ended else 0
     size = sum(item.stat().st_size for item in path.rglob("*") if item.is_file() and not item.is_symlink())
     status = manifest.get("status") or metadata.get("status", "unknown")
-    quality = manifest.get("quality")
-    if not isinstance(quality, (int, float)):
-        quality = None
     topics = {
         topic
         for bag in manifest.get("bags", {}).values()
@@ -188,7 +185,6 @@ def episode_record(path):
         "operator": metadata.get("operator", "—"),
         "robot_model": metadata.get("robot_model", "—"),
         "status": status,
-        "quality": quality,
         "duration_seconds": duration,
         "size_bytes": size,
         "created_at": datetime.fromtimestamp(started / 1e9).astimezone().isoformat() if started else "",
@@ -904,7 +900,6 @@ def self_test():
         (blocked / "data").mkdir()
         (blocked / "data" / "data_0.mcap").write_bytes(b"mcap")
         assert episode_record(blocked)["size_bytes"] == 4
-        assert episode_record(blocked)["quality"] is None
         assert mcap_export_files(root, [blocked.name]) == [(blocked.name, blocked / "data" / "data_0.mcap")]
         launches = []
         opened = open_episode_directory(

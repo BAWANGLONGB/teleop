@@ -16,7 +16,7 @@ from xr_marvin_teleop.common.xr_target_mapper import (
 )
 
 
-DEFAULT_JOINT_K = (5.0, 5.0, 5.0, 4.0, 1.0, 1.0, 1.0)
+DEFAULT_JOINT_K = (5.0, 5.0, 5.0, 4.0, 3.0, 1.0, 1.0)
 DEFAULT_JOINT_D = (0.4, 0.4, 0.4, 0.4, 0.2, 0.2, 0.2)
 DEFAULT_CONTROL_HZ = 50
 DEFAULT_JOINT_VELOCITY_RATIO = 10

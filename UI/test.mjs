@@ -46,7 +46,7 @@ try {
     await evaluate('({sections:document.querySelectorAll("#view-workbench .usage-guide section").length,pico:document.querySelector("#view-workbench .usage-guide").textContent.includes("Network=WORKING"),enter:document.querySelector("#view-workbench .usage-guide").textContent.includes("Enter")})'),
     { sections: 2, pico: true, enter: true },
   );
-  await evaluate('renderEpisodes([{id:"episode_131937_81295016",task:"pick_and_place",operator:"zxcx",robot_model:"M6S-Lite-CCS-680-B",status:"degraded",quality:null,duration_seconds:115,size_bytes:5583457485,created_at:"2026-09-03T13:19:00+08:00",modalities:["关节","PICO","触觉","视觉"]}])');
+  await evaluate('renderEpisodes([{id:"episode_131937_81295016",task:"pick_and_place",operator:"zxcx",robot_model:"M6S-Lite-CCS-680-B",status:"degraded",duration_seconds:115,size_bytes:5583457485,created_at:"2026-09-03T13:19:00+08:00",modalities:["关节","PICO","触觉","视觉"]}])');
 
   assert.deepEqual(
     await evaluate('document.querySelector(".episode-select").click();({selected:exportCount.textContent,enabled:!exportMcap.disabled,detail:episodeDialog.open})'),
@@ -67,8 +67,8 @@ try {
     { rows: 1, count: "0" },
   );
   assert.deepEqual(
-    await evaluate('openView("workbench");visionResolution.value="1600x1296";visionResolution.dispatchEvent(new Event("change"));({fps:visionFps.value,options:visionFps.options.length,fixed:visionFps.disabled,format:document.querySelector(".camera-format").textContent})'),
-    { fps: "60", options: 1, fixed: true, format: "1600 × 1296 · 目标 60 Hz" },
+    await evaluate('openView("workbench");visionResolution.value="1600x1296";visionResolution.dispatchEvent(new Event("change"));document.querySelector(".camera-format").textContent'),
+    "1600 × 1296 · 目标 60 Hz",
   );
   assert.equal(await evaluate('document.querySelector(".camera-scene").getBoundingClientRect().height >= 340'), true);
   assert.deepEqual(await evaluate('({images:document.querySelectorAll(".camera-preview").length,active:document.querySelectorAll(".preview-ready").length})'), { images: 2, active: 0 });

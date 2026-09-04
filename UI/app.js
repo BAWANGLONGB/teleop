@@ -1,6 +1,5 @@
 const views = {
   workbench: "采集作业", datasets: "数据集", devices: "设备管理",
-  calibration: "标定中心",
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -18,7 +17,6 @@ let lastHardwareStatus = null;
 let hardwareRequestError = "";
 let collectionError = "";
 let robotResetPending = false;
-let cameraFormatMap = { "640x480": [60], "1600x1296": [60] };
 const previewFps = 30;
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -172,13 +170,10 @@ function setPicoStatus(status, data = {}) {
   $("#picoService").textContent = state[3];
   $("#picoRate").textContent = status === "connected" ? clients : "—";
   $("#picoLatency").textContent = status === "connected" ? "TCP + Ping" : "—";
-  $("#picoLastFrame").textContent = "未监测";
   $("#picoStreamRate").textContent = status === "connected" ? "端口在线" : "—";
   $("#picoStreamLatency").textContent = status === "connected" ? clients : "—";
   $("#picoStreamHealth").className = health.className;
   $("#picoStreamHealth").textContent = status === "connected" ? "稳定" : state[2];
-  $("#overallReady").className = `ready-pill ${status === "connected" ? "" : status === "checking" ? "checking" : "not-ready"}`;
-  $("span", $("#overallReady")).textContent = status === "connected" ? "全部链路已就绪" : status === "checking" ? "正在检查采集链路" : "PICO 未就绪";
   $("#startButton").disabled = status !== "connected" && !$("#startButton").classList.contains("recording");
   updateDeviceSummary();
   renderMonitorErrors();
@@ -198,11 +193,7 @@ function updateDeviceSummary() {
   const devices = Number(lastPicoStatus.connected) + Number(data.marvin.connected)
     + das.filter((item) => item.device_present).length
     + cameras.filter((item) => item.device_present).length;
-  const processes = Number(lastPicoStatus.service_ready) + Number(data.processes.marvin)
-    + Number(data.processes.das && data.processes.vision);
   $("#deviceOnlineCount").textContent = `${devices} / 6`;
-  $("#topicHealthCount").textContent = `${devices} / 6`;
-  $("#processHealthCount").textContent = `${processes} / 3`;
 }
 
 function renderHardwareStatus(data) {
@@ -294,15 +285,10 @@ async function checkPico(reconnect = false, silent = false) {
 function syncVisionSettings() {
   const enabled = $("#visionEnabled").checked;
   const resolution = $("#visionResolution");
-  const fps = $("#visionFps");
-  const supported = cameraFormatMap[resolution.value] || [60];
-  $$('option', fps).forEach((option) => option.hidden = !supported.includes(Number(option.value)));
-  if (!supported.includes(Number(fps.value))) fps.value = String(supported[0]);
   resolution.disabled = !enabled;
-  fps.disabled = true;
   $("#visionOptions").classList.toggle("disabled", !enabled);
   $("#cameraGrid").classList.toggle("vision-off", !enabled);
-  $$(".camera-format").forEach((item) => item.textContent = enabled ? `${resolution.value.replace("x", " × ")} · 目标 ${fps.value} Hz` : "已关闭");
+  $$(".camera-format").forEach((item) => item.textContent = enabled ? `${resolution.value.replace("x", " × ")} · 目标 60 Hz` : "已关闭");
   if (lastHardwareStatus) renderHardwareStatus(lastHardwareStatus);
 }
 
@@ -310,15 +296,13 @@ async function loadCameraFormats() {
   if (!useApi) return;
   try {
     const data = await api("/api/devices/cameras/formats");
-    cameraFormatMap = Object.fromEntries(data.formats.map((item) => [item.resolution, item.fps]));
     const resolution = $("#visionResolution");
-    const selected = cameraFormatMap[resolution.value] ? resolution.value : data.formats[0].resolution;
+    const selected = data.formats.some((item) => item.resolution === resolution.value) ? resolution.value : data.formats[0].resolution;
     resolution.replaceChildren(...data.formats.map((item) => new Option(
       `${item.resolution.replace("x", " × ")} · ${data.source === "v4l2" ? "设备" : item.resolution === "640x480" ? "当前" : "SDK"}`,
       item.resolution,
     )));
     resolution.value = selected;
-    $("#visionFps").replaceChildren(new Option("60 FPS · 固定", "60", true, true));
     syncVisionSettings();
   } catch (error) {
     showToast(`相机能力读取失败：${error.message}`);
@@ -352,20 +336,18 @@ const episodeStates = {
 
 function renderEpisodes(episodes) {
   episodeRecords = episodes;
-  const empty = '<tr><td colspan="8">暂无采集数据</td></tr>';
+  const empty = '<tr><td colspan="7">暂无采集数据</td></tr>';
   const rows = episodes.map((episode) => {
     const state = episodeStates[episode.status] || [episode.status, "review"];
-    const quality = episode.quality == null ? "—" : episode.quality;
     const date = episode.created_at ? new Date(episode.created_at).toLocaleString("zh-CN", { hour12: false }).replaceAll("/", "-") : "—";
-    return `<tr data-episode="${escapeHTML(episode.id)}"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 ${escapeHTML(episode.id)}"><b>EP · ${escapeHTML(episode.id.slice(-8))}</b></label></td><td>${escapeHTML(episode.task)}</td><td>${escapeHTML(date)}</td><td>${episode.modalities.map((item) => `<span class="modality">${escapeHTML(item)}</span>`).join("")}</td><td>${formatDuration(episode.duration_seconds)}</td><td><b class="score${quality < 90 ? " warn" : ""}">${quality}</b></td><td><span class="table-status ${state[1]}">${escapeHTML(state[0])}</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>`;
+    return `<tr data-episode="${escapeHTML(episode.id)}"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 ${escapeHTML(episode.id)}"><b>EP · ${escapeHTML(episode.id.slice(-8))}</b></label></td><td>${escapeHTML(episode.task)}</td><td>${escapeHTML(date)}</td><td>${episode.modalities.map((item) => `<span class="modality">${escapeHTML(item)}</span>`).join("")}</td><td>${formatDuration(episode.duration_seconds)}</td><td><span class="table-status ${state[1]}">${escapeHTML(state[0])}</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>`;
   });
   $("#datasetRows").innerHTML = rows.join("") || empty;
   $("#recentEpisodeRows").innerHTML = episodes.slice(0, 3).map((episode) => {
     const state = episodeStates[episode.status] || [episode.status, "review"];
-    const quality = episode.quality == null ? "—" : episode.quality;
     const date = episode.created_at ? new Date(episode.created_at).toLocaleString("zh-CN", { hour12: false }).replaceAll("/", "-") : "—";
     const operator = String(episode.operator ?? "—");
-    return `<tr data-episode="${escapeHTML(episode.id)}"><td><b>EP · ${escapeHTML(episode.id.slice(-8))}</b><small>${escapeHTML(date)}</small></td><td>${escapeHTML(episode.task)}</td><td><span class="mini-avatar">${escapeHTML(operator.slice(0, 1).toUpperCase())}</span>${escapeHTML(operator)}</td><td>${formatDuration(episode.duration_seconds)}</td><td>${formatSize(episode.size_bytes)}</td><td><b class="score${quality < 90 ? " warn" : ""}">${quality}</b></td><td><span class="table-status ${state[1]}">${escapeHTML(state[0])}</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>`;
+    return `<tr data-episode="${escapeHTML(episode.id)}"><td><b>EP · ${escapeHTML(episode.id.slice(-8))}</b><small>${escapeHTML(date)}</small></td><td>${escapeHTML(episode.task)}</td><td><span class="mini-avatar">${escapeHTML(operator.slice(0, 1).toUpperCase())}</span>${escapeHTML(operator)}</td><td>${formatDuration(episode.duration_seconds)}</td><td>${formatSize(episode.size_bytes)}</td><td><span class="table-status ${state[1]}">${escapeHTML(state[0])}</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>`;
   }).join("") || empty;
   $("#datasetCount").textContent = episodes.length;
   const bytes = episodes.reduce((total, item) => total + item.size_bytes, 0);
@@ -378,8 +360,6 @@ function showEpisodeDetails(episode) {
   $("#detailId").textContent = episode.id;
   $("#detailStatus").className = `table-status ${state[1]}`;
   $("#detailStatus").textContent = state[0];
-  $("#detailQuality").textContent = episode.quality ?? "—";
-  $("#detailAssessment").textContent = episode.quality == null ? "未提供质量分" : `质量分 ${episode.quality}`;
   $("#detailTask").textContent = episode.task;
   $("#detailOperator").textContent = episode.operator;
   $("#detailRobot").textContent = episode.robot_model;
@@ -446,7 +426,7 @@ async function startCollection() {
     task: form.get("task"), operator: form.get("operator"), robot_model: form.get("robot"),
     max_duration: form.get("duration") || null,
     camera_resolution: form.get("camera_resolution") || "640x480",
-    camera_fps: Number(form.get("camera_fps") || 60),
+    camera_fps: 60,
     no_vision: !$("#visionEnabled").checked,
     nsp_lateral: $("#nspLateral").checked,
     confirmed_estop: true, confirmed_joint_mapping: true, confirmed_workspace_clear: true,
@@ -523,16 +503,13 @@ $("#runCheck").addEventListener("click", async (event) => {
 });
 $("#deviceCheck").addEventListener("click", async () => {
   if ($("#startButton").classList.contains("recording")) return showToast("采集中不能执行全链路自检");
-  $("#lastUpdated").textContent = "检测中…";
   await Promise.all([checkPico(false, true), syncHardwareStatus(true)]);
-  $("#lastUpdated").textContent = "刚刚";
 });
 $("#picoConnection").addEventListener("click", () => checkPico(true));
 $("#reconnectPico").addEventListener("click", () => checkPico(true));
 $("#resetConfig").addEventListener("click", () => { $("#collectionForm").reset(); syncVisionSettings(); showToast("已恢复默认采集配置"); });
 $("#visionEnabled").addEventListener("change", syncVisionSettings);
 $("#visionResolution").addEventListener("change", syncVisionSettings);
-$("#visionFps").addEventListener("change", syncVisionSettings);
 
 $("#startButton").addEventListener("click", () => {
   if ($("#startButton").classList.contains("recording")) return stopCollection();
