@@ -2,11 +2,17 @@ import numpy as np
 
 
 # Operator stands behind Marvin: OpenXR right/up/forward -> Marvin +X/+Z/+Y.
+# OPENXR_TO_MARVIN_ROTATION = np.array(
+#     [[1.0, 0.0, 0.0], 
+#      [0.0, 0.0, -1.0], 
+#      [0.0, 1.0, 0.0]]
+# )
 OPENXR_TO_MARVIN_ROTATION = np.array(
-    [[1.0, 0.0, 0.0], 
-     [0.0, 0.0, -1.0], 
+    [[0.0, 0.0, 1.0], 
+     [1.0, 0.0, 0.0], 
      [0.0, 1.0, 0.0]]
 )
+
 
 
 def _rotation_matrix_from_openxr_pose(openxr_pose):

@@ -71,7 +71,7 @@ API 将选择的 `camera_resolution` 与 `camera_fps` 写入本次作业专用 D
 
 实时预览不重复打开相机：`capture_das_mjpeg.py` 写入原始帧后，以最高 30 FPS 原子更新 `/dev/shm/fieldnote-preview-<uid>/left.jpg|right.jpg`。共享内存或浏览器异常时只禁用预览，不影响采集；HTTP 服务只读快照，采集停止后清理。
 
-Robotics Service 就绪以 TCP `63901` 和 `60061` 均处于监听状态为准；PICO 在线还要求 `63901` 存在来自非本机地址的 `ESTABLISHED` TCP 会话。页面每 5 秒刷新。连接按钮可执行 `bash /opt/apps/roboticsservice/runService.sh` 并等待服务端口就绪，但 UI 不启动、停止或探测 `publish_pico.py` 和 ROS 话题。
+Robotics Service 就绪以 TCP `63901` 和 `60061` 均处于监听状态为准；PICO 在线还要求 `63901` 存在来自非本机地址的 `ESTABLISHED` TCP 会话，且该客户端 Ping 可达，以排除设备掉线后残留的 TCP 会话。页面每 5 秒刷新。连接按钮可执行 `bash /opt/apps/roboticsservice/runService.sh` 并等待服务端口就绪，但 UI 不启动、停止或探测 `publish_pico.py` 和 ROS 话题。
 
 机械臂、夹爪和相机状态同样不访问 ROS：机械臂仅被动读取内核 UDP socket，检查是否存在指向 `192.168.1.190` 的端口；夹爪仅检查 `/dev/ttyFingerLeft`、`/dev/ttyFingerRight`，相机仅检查 `/dev/finger_camera_left`、`/dev/finger_camera_right`。这些状态只表示端口或设备节点存在，不代表数据内容有效。
 

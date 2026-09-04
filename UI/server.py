@@ -163,16 +163,25 @@ def episode_record(path):
     started = int(metadata.get("started_at_ns", 0) or 0)
     ended = int(metadata.get("ended_at_ns", 0) or 0)
     duration = max(0, (ended - started) // 1_000_000_000) if ended else 0
-    size = sum(
-        int(item.get("size_bytes", 0) or 0)
-        for item in manifest.get("files", {}).values()
-        if isinstance(item, dict)
-    )
+    size = sum(item.stat().st_size for item in path.rglob("*") if item.is_file() and not item.is_symlink())
     status = manifest.get("status") or metadata.get("status", "unknown")
-    degraded = len(manifest.get("degraded_topics", []))
-    quality = 100 if status == "validated" else max(1, 96 - 2 * degraded) if status == "degraded" else 0 if status == "rejected" else None
-    bags = metadata.get("bags", [])
-    modalities = ["关节", "PICO", "触觉"] + (["视觉"] if any("vision" in bag for bag in bags) else [])
+    quality = manifest.get("quality")
+    if not isinstance(quality, (int, float)):
+        quality = None
+    topics = {
+        topic
+        for bag in manifest.get("bags", {}).values()
+        if isinstance(bag, dict)
+        for topic in bag
+    }
+    modalities = [
+        label for label, present in (
+            ("关节", any("marvin" in topic for topic in topics)),
+            ("PICO", "/raw/pico/frame" in topics),
+            ("触觉", any("tactile" in topic for topic in topics)),
+            ("视觉", any("image" in topic for topic in topics)),
+        ) if present
+    ]
     return {
         "id": metadata.get("episode_id", path.name),
         "task": metadata.get("task", "—"),
@@ -329,30 +338,6 @@ def pico_clients():
     return parse_pico_clients(result.stdout) if result.returncode == 0 else []
 
 
-def pico_status():
-    service = process_running("RoboticsServiceProcess")
-    ports = robotics_service_ports()
-    service_ready = pico_ports_ready(ports)
-    clients = pico_clients() if service_ready else []
-    connected = bool(clients)
-    error = None
-    if not service_ready:
-        missing = ", ".join(str(port) for port in ROBOTICS_SERVICE_PORTS if port not in ports)
-        error = f"PICO 服务端口未就绪：{missing}"
-    elif not connected:
-        error = "服务已就绪，PICO 尚未建立 63901 TCP 连接"
-    print_status_error("PICO", error)
-    return {
-        "connected": connected,
-        "service_running": service,
-        "service_ready": service_ready,
-        "ports_listening": ports,
-        "expected_ports": list(ROBOTICS_SERVICE_PORTS),
-        "clients": clients,
-        "error": error,
-    }
-
-
 def ping_host(address, runner=subprocess.run):
     tool = shutil.which("ping")
     if not tool:
@@ -365,6 +350,38 @@ def ping_host(address, runner=subprocess.run):
     except (OSError, subprocess.TimeoutExpired):
         return False, f"Ping {address} 超时"
     return (True, None) if result.returncode == 0 else (False, f"Ping {address} 无响应")
+
+
+def reachable_hosts(addresses, probe=ping_host):
+    return [address for address in addresses if probe(address)[0]]
+
+
+def pico_status():
+    service = process_running("RoboticsServiceProcess")
+    ports = robotics_service_ports()
+    service_ready = pico_ports_ready(ports)
+    tcp_clients = pico_clients() if service_ready else []
+    clients = reachable_hosts(tcp_clients)
+    connected = bool(clients)
+    error = None
+    if not service_ready:
+        missing = ", ".join(str(port) for port in ROBOTICS_SERVICE_PORTS if port not in ports)
+        error = f"PICO 服务端口未就绪：{missing}"
+    elif tcp_clients and not connected:
+        error = f"检测到 63901 TCP 会话，但客户端 {', '.join(tcp_clients)} Ping 不通"
+    elif not connected:
+        error = "服务已就绪，PICO 尚未建立 63901 TCP 连接"
+    print_status_error("PICO", error)
+    return {
+        "connected": connected,
+        "service_running": service,
+        "service_ready": service_ready,
+        "ports_listening": ports,
+        "expected_ports": list(ROBOTICS_SERVICE_PORTS),
+        "clients": clients,
+        "tcp_clients": tcp_clients,
+        "error": error,
+    }
 
 
 def hardware_status():
@@ -700,6 +717,8 @@ class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        if not urlsplit(self.path).path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
     def send_json(self, payload, status=HTTPStatus.OK):
@@ -856,6 +875,7 @@ def self_test():
     assert parse_pico_clients("ESTAB 0 0 192.168.1.100:63901 192.168.1.42:51234") == ["192.168.1.42"]
     assert not parse_pico_clients("ESTAB 0 0 127.0.0.1:63901 127.0.0.1:51234")
     assert ping_host(MARVIN_IP, lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0)) == (True, None)
+    assert reachable_hosts(["up", "down"], lambda address: (address == "up", None)) == ["up"]
     LAST_STATUS_ERRORS["self-test"] = "same"
     assert not print_status_error("self-test", "same")
     assert not print_status_error("self-test", None) and "self-test" not in LAST_STATUS_ERRORS
@@ -883,6 +903,8 @@ def self_test():
         blocked.mkdir()
         (blocked / "data").mkdir()
         (blocked / "data" / "data_0.mcap").write_bytes(b"mcap")
+        assert episode_record(blocked)["size_bytes"] == 4
+        assert episode_record(blocked)["quality"] is None
         assert mcap_export_files(root, [blocked.name]) == [(blocked.name, blocked / "data" / "data_0.mcap")]
         launches = []
         opened = open_episode_directory(

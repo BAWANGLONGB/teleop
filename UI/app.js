@@ -11,7 +11,7 @@ let recordingStarted = 0;
 let timerHandle;
 let previewTimer;
 let pendingDeleteId = "";
-let episodeCount = 28;
+let episodeRecords = [];
 let picoConnected = false;
 let lastPicoStatus = { connected: false };
 let lastHardwareStatus = null;
@@ -157,9 +157,9 @@ function setPicoStatus(status, data = {}) {
   const clients = (data.clients || []).join(" / ");
   const service = data.service_ready ? `Robotics Service · ${ports}` : "Robotics Service · 端口未就绪";
   const states = {
-    connected: ["PICO 已连接", `${clients} · TCP 已建立`, "在线", service],
+    connected: ["PICO 已连接", `${clients} · TCP + Ping 正常`, "在线", service],
     checking: ["正在检测 PICO", "检查 63901 / 60061", "检测中", "Robotics Service · 检查端口"],
-    disconnected: ["PICO 服务未连接", data.error || "服务端口未就绪", "离线", service],
+    disconnected: ["PICO 未连接", data.error || "服务端口未就绪", "离线", service],
   };
   const state = states[status];
   picoConnected = status === "connected";
@@ -171,15 +171,12 @@ function setPicoStatus(status, data = {}) {
   health.textContent = state[2];
   $("#picoService").textContent = state[3];
   $("#picoRate").textContent = status === "connected" ? clients : "—";
-  $("#picoLatency").textContent = status === "connected" ? "63901 ESTAB" : "—";
+  $("#picoLatency").textContent = status === "connected" ? "TCP + Ping" : "—";
   $("#picoLastFrame").textContent = "未监测";
   $("#picoStreamRate").textContent = status === "connected" ? "端口在线" : "—";
   $("#picoStreamLatency").textContent = status === "connected" ? clients : "—";
   $("#picoStreamHealth").className = health.className;
   $("#picoStreamHealth").textContent = status === "connected" ? "稳定" : state[2];
-  $("#picoMetricStatus").textContent = state[2];
-  $("#picoMetricNote").textContent = status === "connected" ? clients : state[1];
-  $("#picoMetricNote").classList.toggle("positive", status === "connected");
   $("#overallReady").className = `ready-pill ${status === "connected" ? "" : status === "checking" ? "checking" : "not-ready"}`;
   $("span", $("#overallReady")).textContent = status === "connected" ? "全部链路已就绪" : status === "checking" ? "正在检查采集链路" : "PICO 未就绪";
   $("#startButton").disabled = status !== "connected" && !$("#startButton").classList.contains("recording");
@@ -336,11 +333,7 @@ function askDelete(episodeId) {
 }
 
 function removeEpisode(episodeId) {
-  $$('[data-episode]').filter((row) => row.dataset.episode === episodeId).forEach((row) => row.remove());
-  episodeCount = Math.max(0, episodeCount - 1);
-  $("#datasetCount").textContent = episodeCount;
-  $("#datasetSummary").textContent = `共 ${episodeCount} 段`;
-  syncExportSelection();
+  renderEpisodes(episodeRecords.filter((episode) => episode.id !== episodeId));
 }
 
 function formatDuration(seconds) {
@@ -348,25 +341,52 @@ function formatDuration(seconds) {
 }
 
 function formatSize(bytes) {
-  return bytes ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : "—";
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 }
 
+const episodeStates = {
+  validated: ["已通过", "passed"], degraded: ["待复核", "review"],
+  rejected: ["已拒绝", "rejected"], completed: ["已完成", "passed"],
+  recording: ["采集中", "review"], aborted: ["已中止", "rejected"],
+};
+
 function renderEpisodes(episodes) {
-  const statuses = {
-    validated: ["已通过", "passed"], degraded: ["待复核", "review"],
-    rejected: ["已拒绝", "rejected"], completed: ["已完成", "passed"],
-  };
-  $("#datasetRows").innerHTML = episodes.map((episode) => {
-    const state = statuses[episode.status] || [episode.status, "review"];
+  episodeRecords = episodes;
+  const empty = '<tr><td colspan="8">暂无采集数据</td></tr>';
+  const rows = episodes.map((episode) => {
+    const state = episodeStates[episode.status] || [episode.status, "review"];
     const quality = episode.quality == null ? "—" : episode.quality;
     const date = episode.created_at ? new Date(episode.created_at).toLocaleString("zh-CN", { hour12: false }).replaceAll("/", "-") : "—";
-    return `<tr data-episode="${escapeHTML(episode.id)}"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 ${escapeHTML(episode.id)}"><b>EP · ${escapeHTML(episode.id.slice(-8))}</b></label></td><td>${escapeHTML(episode.task)}</td><td>${escapeHTML(date)}</td><td>${episode.modalities.map((item) => `<span class="modality">${escapeHTML(item)}</span>`).join("")}</td><td>${formatDuration(episode.duration_seconds)}</td><td><b class="score${quality < 90 ? " warn" : ""}">${quality}</b></td><td><span class="table-status ${state[1]}">${state[0]}</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>`;
-  }).join("");
-  episodeCount = episodes.length;
-  $("#datasetCount").textContent = episodeCount;
+    return `<tr data-episode="${escapeHTML(episode.id)}"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 ${escapeHTML(episode.id)}"><b>EP · ${escapeHTML(episode.id.slice(-8))}</b></label></td><td>${escapeHTML(episode.task)}</td><td>${escapeHTML(date)}</td><td>${episode.modalities.map((item) => `<span class="modality">${escapeHTML(item)}</span>`).join("")}</td><td>${formatDuration(episode.duration_seconds)}</td><td><b class="score${quality < 90 ? " warn" : ""}">${quality}</b></td><td><span class="table-status ${state[1]}">${escapeHTML(state[0])}</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>`;
+  });
+  $("#datasetRows").innerHTML = rows.join("") || empty;
+  $("#recentEpisodeRows").innerHTML = episodes.slice(0, 3).map((episode) => {
+    const state = episodeStates[episode.status] || [episode.status, "review"];
+    const quality = episode.quality == null ? "—" : episode.quality;
+    const date = episode.created_at ? new Date(episode.created_at).toLocaleString("zh-CN", { hour12: false }).replaceAll("/", "-") : "—";
+    const operator = String(episode.operator ?? "—");
+    return `<tr data-episode="${escapeHTML(episode.id)}"><td><b>EP · ${escapeHTML(episode.id.slice(-8))}</b><small>${escapeHTML(date)}</small></td><td>${escapeHTML(episode.task)}</td><td><span class="mini-avatar">${escapeHTML(operator.slice(0, 1).toUpperCase())}</span>${escapeHTML(operator)}</td><td>${formatDuration(episode.duration_seconds)}</td><td>${formatSize(episode.size_bytes)}</td><td><b class="score${quality < 90 ? " warn" : ""}">${quality}</b></td><td><span class="table-status ${state[1]}">${escapeHTML(state[0])}</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>`;
+  }).join("") || empty;
+  $("#datasetCount").textContent = episodes.length;
   const bytes = episodes.reduce((total, item) => total + item.size_bytes, 0);
-  $("#datasetSummary").textContent = `共 ${episodeCount} 段 · ${formatSize(bytes)}`;
+  $("#datasetSummary").textContent = `共 ${episodes.length} 段 · ${formatSize(bytes)}`;
   syncExportSelection();
+}
+
+function showEpisodeDetails(episode) {
+  const state = episodeStates[episode.status] || [episode.status, "review"];
+  $("#detailId").textContent = episode.id;
+  $("#detailStatus").className = `table-status ${state[1]}`;
+  $("#detailStatus").textContent = state[0];
+  $("#detailQuality").textContent = episode.quality ?? "—";
+  $("#detailAssessment").textContent = episode.quality == null ? "未提供质量分" : `质量分 ${episode.quality}`;
+  $("#detailTask").textContent = episode.task;
+  $("#detailOperator").textContent = episode.operator;
+  $("#detailRobot").textContent = episode.robot_model;
+  $("#detailModalities").textContent = episode.modalities.join(" · ") || "—";
+  $("#detailDuration").textContent = formatDuration(episode.duration_seconds);
+  $("#detailSize").textContent = formatSize(episode.size_bytes);
+  $("#episodeDialog").showModal();
 }
 
 function selectedEpisodeIds() {
@@ -404,6 +424,7 @@ async function loadEpisodes() {
     const data = await api("/api/episodes");
     renderEpisodes(data.episodes);
   } catch (error) {
+    $("#datasetSummary").textContent = "真实数据加载失败";
     showToast(`数据集读取失败：${error.message}`);
   }
 }
@@ -544,8 +565,8 @@ document.addEventListener("click", (event) => {
   if (!row) return;
   if (event.target.closest(".episode-choice")) return;
   if (event.target.closest(".delete-button")) return askDelete(row.dataset.episode);
-  $("#detailId").textContent = row.dataset.episode;
-  $("#episodeDialog").showModal();
+  const episode = episodeRecords.find((item) => item.id === row.dataset.episode);
+  if (episode) showEpisodeDetails(episode);
 });
 $("#deleteFromDetail").addEventListener("click", () => {
   const episodeId = $("#detailId").textContent;
@@ -571,7 +592,8 @@ syncVisionSettings();
 openView(location.hash.slice(1) || "workbench");
 if (useApi) {
   setPicoStatus("checking");
-  Promise.all([checkPico(false, true), syncHardwareStatus(), loadCameraFormats(), loadEpisodes(), syncCollectionStatus()]);
+  loadEpisodes();
+  Promise.all([checkPico(false, true), syncHardwareStatus(), loadCameraFormats(), syncCollectionStatus()]);
   setInterval(syncCollectionStatus, 2000);
   setInterval(() => checkPico(false, true), 5000);
   setInterval(syncHardwareStatus, 5000);

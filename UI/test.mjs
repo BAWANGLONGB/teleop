@@ -43,9 +43,10 @@ try {
 
   await evaluate('new Promise(r=>{const wait=setInterval(()=>{if(document.readyState==="complete"&&typeof askDelete==="function"){clearInterval(wait);r(true)}},20)})');
   assert.deepEqual(
-    await evaluate('({sections:document.querySelectorAll(".usage-guide section").length,pico:document.querySelector(".usage-guide").textContent.includes("Network=WORKING"),enter:document.querySelector(".usage-guide").textContent.includes("Enter")})'),
+    await evaluate('({sections:document.querySelectorAll("#view-workbench .usage-guide section").length,pico:document.querySelector("#view-workbench .usage-guide").textContent.includes("Network=WORKING"),enter:document.querySelector("#view-workbench .usage-guide").textContent.includes("Enter")})'),
     { sections: 2, pico: true, enter: true },
   );
+  await evaluate('renderEpisodes([{id:"episode_131937_81295016",task:"pick_and_place",operator:"zxcx",robot_model:"M6S-Lite-CCS-680-B",status:"degraded",quality:null,duration_seconds:115,size_bytes:5583457485,created_at:"2026-09-03T13:19:00+08:00",modalities:["关节","PICO","触觉","视觉"]}])');
 
   assert.deepEqual(
     await evaluate('document.querySelector(".episode-select").click();({selected:exportCount.textContent,enabled:!exportMcap.disabled,detail:episodeDialog.open})'),
@@ -63,7 +64,7 @@ try {
   );
   assert.deepEqual(
     await evaluate('removeEpisode(deleteTarget.textContent);({rows:datasetRows.rows.length,count:datasetCount.textContent})'),
-    { rows: 4, count: "27" },
+    { rows: 1, count: "0" },
   );
   assert.deepEqual(
     await evaluate('openView("workbench");visionResolution.value="1600x1296";visionResolution.dispatchEvent(new Event("change"));({fps:visionFps.value,options:visionFps.options.length,fixed:visionFps.disabled,format:document.querySelector(".camera-format").textContent})'),
@@ -79,10 +80,6 @@ try {
   assert.equal(await evaluate('monitorErrors.classList.contains("clear")'), false);
   assert.equal(await evaluate('picoConnection.click();new Promise(r=>setTimeout(()=>r(picoConnection.classList.contains("disconnected")),20))'), true);
   await evaluate('setPicoStatus("connected", {service_ready:true,ports_listening:[60061,63901],clients:["192.168.1.42"]})');
-  assert.deepEqual(
-    await evaluate('({status:picoMetricStatus.textContent,note:picoMetricNote.textContent})'),
-    { status: "在线", note: "192.168.1.42" },
-  );
   assert.equal(await evaluate('monitorErrors.classList.contains("clear")'), true);
   assert.equal(await evaluate('collectionError="遥操进程异常退出：测试故障";renderMonitorErrors();monitorErrorList.textContent.includes("测试故障")'), true);
   await evaluate('collectionError="";renderMonitorErrors()');

@@ -32,7 +32,7 @@ python3 UI/server.py
 
 浏览器访问 <http://127.0.0.1:4173>。UI 后端会为采集进程激活 `Teleop` 环境，加载
 ROS Humble 和工作区 `ros2_ws/install/setup.bash`，并清除 `LD_PRELOAD`；设备状态页
-本身不查询 ROS：PICO 检查 TCP `63901/60061` 和外部连接，Marvin Ping
+本身不查询 ROS：PICO 检查 TCP `63901/60061`、外部连接及客户端 Ping，Marvin Ping
 `192.168.1.190`，DAS 只检查左右串口与相机设备节点。
 
 PICO 端连接步骤：

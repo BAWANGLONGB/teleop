@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#151a17">
-  <title>Fieldnote · 机器人数据采集平台</title>
+  <title>XRTELEOP · 机器人数据采集平台</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -34,15 +34,15 @@
   </svg>
 
   <aside class="sidebar" aria-label="主导航">
-    <a class="brand" href="#workbench" data-nav="workbench" aria-label="Fieldnote 首页">
+    <a class="brand" href="#workbench" data-nav="workbench" aria-label="XRTELEOP 首页">
       <span class="brand-mark"><i></i><i></i><i></i></span>
-      <span><b>FIELDNOTE</b><small>DATA OPERATIONS</small></span>
+      <span><b>XRTELEOP</b><small>DATA OPERATIONS</small></span>
     </a>
 
     <nav>
       <p class="nav-label">工作空间</p>
       <button class="nav-item active" data-nav="workbench"><svg><use href="#i-grid"/></svg><span>采集作业</span></button>
-      <button class="nav-item" data-nav="datasets"><svg><use href="#i-data"/></svg><span>数据集</span><em id="datasetCount">28</em></button>
+      <button class="nav-item" data-nav="datasets"><svg><use href="#i-data"/></svg><span>数据集</span><em id="datasetCount">0</em></button>
       <button class="nav-item" data-nav="devices"><svg><use href="#i-device"/></svg><span>设备管理</span></button>
       <button class="nav-item" data-nav="calibration"><svg><use href="#i-tune"/></svg><span>标定中心</span></button>
     </nav>
@@ -74,25 +74,6 @@
         <div class="page-heading">
           <div><p class="eyebrow">03 SEP 2026 · 采集站 01</p><h1>采集作业台</h1><p>确认链路状态，开始一段高质量机器人示教。</p></div>
           <div class="heading-actions"><button class="pico-connection disconnected" id="picoConnection"><span class="pico-orb"><svg><use href="#i-signal"/></svg><i></i></span><span><b>PICO 未连接</b><small>等待后端检测</small></span></button><span class="ready-pill not-ready" id="overallReady"><i></i><span>PICO 未就绪</span></span><button class="button secondary" id="runCheck"><svg><use href="#i-signal"/></svg>重新检测</button></div>
-        </div>
-
-        <div class="metric-grid">
-          <article class="metric-card">
-            <span class="metric-icon mint"><svg><use href="#i-data"/></svg></span>
-            <div><p>今日有效采集</p><strong>4 <small>episodes</small></strong><span class="metric-note positive">↑ 1 较昨日</span></div>
-          </article>
-          <article class="metric-card">
-            <span class="metric-icon blue"><svg><use href="#i-log"/></svg></span>
-            <div><p>有效数据时长</p><strong>18.4 <small>min</small></strong><span class="metric-note">目标 30 min</span></div>
-          </article>
-          <article class="metric-card">
-            <span class="metric-icon amber"><svg><use href="#i-folder"/></svg></span>
-            <div><p>可用存储</p><strong>824 <small>GiB</small></strong><span class="metric-note">预计可采 26 h</span></div>
-          </article>
-          <article class="metric-card">
-            <span class="metric-icon violet"><svg><use href="#i-signal"/></svg></span>
-            <div><p>PICO 连接</p><strong id="picoMetricStatus">离线</strong><span class="metric-note" id="picoMetricNote">等待检测</span></div>
-          </article>
         </div>
 
         <div class="workspace-grid">
@@ -157,6 +138,33 @@
           </aside>
         </div>
 
+        <article class="panel usage-guide" aria-labelledby="usageGuideTitle">
+          <div class="panel-head compact"><div><span class="section-kicker">QUICK START</span><h2 id="usageGuideTitle">使用说明</h2></div></div>
+          <div class="usage-guide-grid">
+            <section>
+              <h3><span>01</span>PICO 端连接</h3>
+              <ol>
+                <li>让 PICO 与采集机 Wi-Fi 处于同一局域网，并保持头显和双手柄唤醒。</li>
+                <li>打开 XRoboToolkit，进入 <code>Data &amp; Control → PC Service → Enter</code>。</li>
+                <li>填写采集机的 Wi-Fi IPv4，例如 <code>192.168.120.115</code>；不要填写 <code>127.0.0.1</code> 或 Marvin 地址。</li>
+                <li>确认 <code>Network=WORKING</code>，打开 <code>Head</code>、<code>Controller</code> 和 <code>Send</code>，关闭 <code>Switch w/ A Button</code>。</li>
+                <li>返回 UI，确认 PICO 显示“已连接”；异常时检查 <code>63901</code>、<code>60061</code> 和实时监督提示。</li>
+              </ol>
+            </section>
+            <section>
+              <h3><span>02</span>数采操作流程</h3>
+              <ol>
+                <li>确认 PICO、机械臂、夹爪和相机状态，完成现场安全检查。</li>
+                <li>填写任务名称、采集员和机器人型号，按需选择视觉、分辨率及最长时长。</li>
+                <li>焦点位于采集配置时按 <code>Enter</code>，或点击“开始采集”。</li>
+                <li>通过实时预览和错误信息监督采集；点击“停止并保存”或按 <code>Esc</code> 安全收尾。</li>
+                <li>在“数据集”搜索、查看、导出或将 Episode 移入回收站。</li>
+              </ol>
+            </section>
+          </div>
+          <p class="usage-warning"><b>安全提示</b> UI 停止不是急停；出现异常运动时立即使用物理急停。</p>
+        </article>
+
         <div class="lower-grid">
           <article class="panel streams-panel">
             <div class="panel-head compact"><div><span class="section-kicker">链路健康</span><h2>数据流</h2></div><button class="text-button" data-nav="devices">查看拓扑 <svg><use href="#i-arrow"/></svg></button></div>
@@ -182,11 +190,7 @@
           <div class="table-wrap">
             <table>
               <thead><tr><th>Episode</th><th>任务</th><th>采集员</th><th>时长</th><th>数据量</th><th>质量</th><th>状态</th><th></th></tr></thead>
-              <tbody>
-                <tr data-episode="episode_131937_81295016"><td><b>EP · 81295016</b><small>今天 13:19</small></td><td>pick_and_place</td><td><span class="mini-avatar">Z</span>zxcx</td><td>01:55</td><td>5.2 GB</td><td><b class="score">99.2</b></td><td><span class="table-status passed">已通过</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>
-                <tr data-episode="episode_105948_83210975"><td><b>EP · 83210975</b><small>今天 10:59</small></td><td>pick_and_place</td><td><span class="mini-avatar">Z</span>zxcx</td><td>04:31</td><td>12.7 GB</td><td><b class="score">97.8</b></td><td><span class="table-status passed">已通过</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>
-                <tr data-episode="episode_104102_1098d89f"><td><b>EP · 1098d89f</b><small>今天 10:41</small></td><td>pick_and_place</td><td><span class="mini-avatar">Z</span>zxcx</td><td>11:04</td><td>30.1 GB</td><td><b class="score warn">88.4</b></td><td><span class="table-status review">待复核</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>
-              </tbody>
+              <tbody id="recentEpisodeRows"><tr><td colspan="8">等待加载真实数据…</td></tr></tbody>
             </table>
           </div>
         </article>
@@ -195,40 +199,8 @@
       <section class="view" id="view-datasets">
         <div class="page-heading"><div><p class="eyebrow">DATA LIBRARY</p><h1>数据集</h1><p>检索、复核并导出标准化 Episode。</p></div><button class="button primary small" data-nav="workbench"><svg><use href="#i-play"/></svg>新建采集</button></div>
         <article class="panel dataset-browser">
-          <div class="dataset-tools"><label class="search"><svg><use href="#i-search"/></svg><input id="episodeSearch" placeholder="搜索 Episode 或任务"></label><button class="button secondary"><svg><use href="#i-filter"/></svg>全部状态</button><button class="button secondary export-button" id="exportMcap" disabled><svg><use href="#i-data"/></svg>导出 MCAP <span id="exportCount" aria-live="polite">0</span></button><span id="datasetSummary">共 28 段 · 126.8 GB</span></div>
-          <div class="table-wrap"><table><thead><tr><th><label class="episode-choice"><input type="checkbox" id="selectAllEpisodes" aria-label="选择全部可见 Episode"><span>Episode</span></label></th><th>任务</th><th>创建时间</th><th>模态</th><th>时长</th><th>质量</th><th>状态</th><th></th></tr></thead><tbody id="datasetRows">
-            <tr data-episode="episode_131937_81295016"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 episode_131937_81295016"><b>EP · 81295016</b></label></td><td>pick_and_place</td><td>2026-09-03 13:19</td><td><span class="modality">视觉</span><span class="modality">触觉</span><span class="modality">关节</span></td><td>01:55</td><td><b class="score">99.2</b></td><td><span class="table-status passed">已通过</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>
-            <tr data-episode="episode_105948_83210975"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 episode_105948_83210975"><b>EP · 83210975</b></label></td><td>pick_and_place</td><td>2026-09-03 10:59</td><td><span class="modality">视觉</span><span class="modality">触觉</span><span class="modality">关节</span></td><td>04:31</td><td><b class="score">97.8</b></td><td><span class="table-status passed">已通过</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>
-            <tr data-episode="episode_104102_1098d89f"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 episode_104102_1098d89f"><b>EP · 1098d89f</b></label></td><td>pick_and_place</td><td>2026-09-03 10:41</td><td><span class="modality">视觉</span><span class="modality">触觉</span><span class="modality">关节</span></td><td>11:04</td><td><b class="score warn">88.4</b></td><td><span class="table-status review">待复核</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>
-            <tr data-episode="episode_103901_baf8d664"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 episode_103901_baf8d664"><b>EP · baf8d664</b></label></td><td>pick_and_place</td><td>2026-09-03 10:39</td><td><span class="modality">触觉</span><span class="modality">关节</span></td><td>02:08</td><td><b class="score">96.1</b></td><td><span class="table-status passed">已通过</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>
-            <tr data-episode="episode_202442_1fc3523a"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 episode_202442_1fc3523a"><b>EP · 1fc3523a</b></label></td><td>pick_and_place</td><td>2026-09-02 20:24</td><td><span class="modality">视觉</span><span class="modality">触觉</span><span class="modality">关节</span></td><td>07:42</td><td><b class="score warn">84.7</b></td><td><span class="table-status rejected">已拒绝</span></td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>
-          </tbody></table></div>
-        </article>
-        <article class="panel usage-guide" aria-labelledby="usageGuideTitle">
-          <div class="panel-head compact"><div><span class="section-kicker">QUICK START</span><h2 id="usageGuideTitle">使用说明</h2></div></div>
-          <div class="usage-guide-grid">
-            <section>
-              <h3><span>01</span>PICO 端连接</h3>
-              <ol>
-                <li>让 PICO 与采集机 Wi-Fi 处于同一局域网，并保持头显和双手柄唤醒。</li>
-                <li>打开 XRoboToolkit，进入 <code>Data &amp; Control → PC Service → Enter</code>。</li>
-                <li>填写采集机的 Wi-Fi IPv4，例如 <code>192.168.120.115</code>；不要填写 <code>127.0.0.1</code> 或 Marvin 地址。</li>
-                <li>确认 <code>Network=WORKING</code>，打开 <code>Head</code>、<code>Controller</code> 和 <code>Send</code>，关闭 <code>Switch w/ A Button</code>。</li>
-                <li>返回 UI，确认 PICO 显示“已连接”；异常时检查 <code>63901</code>、<code>60061</code> 和实时监督提示。</li>
-              </ol>
-            </section>
-            <section>
-              <h3><span>02</span>UI 采集操作</h3>
-              <ol>
-                <li>在“采集作业”确认 PICO、机械臂、夹爪和相机状态，完成现场安全检查。</li>
-                <li>填写任务名称、采集员和机器人型号，按需选择视觉、分辨率及最长时长。</li>
-                <li>焦点位于采集配置时按 <code>Enter</code>，或点击“开始采集”。</li>
-                <li>通过实时预览和错误信息监督采集；点击“停止并保存”或按 <code>Esc</code> 安全收尾。</li>
-                <li>在“数据集”搜索、查看、导出或将 Episode 移入回收站。</li>
-              </ol>
-            </section>
-          </div>
-          <p class="usage-warning"><b>安全提示</b> UI 停止不是急停；出现异常运动时立即使用物理急停。</p>
+          <div class="dataset-tools"><label class="search"><svg><use href="#i-search"/></svg><input id="episodeSearch" placeholder="搜索 Episode 或任务"></label><button class="button secondary"><svg><use href="#i-filter"/></svg>全部状态</button><button class="button secondary export-button" id="exportMcap" disabled><svg><use href="#i-data"/></svg>导出 MCAP <span id="exportCount" aria-live="polite">0</span></button><span id="datasetSummary">等待加载真实数据…</span></div>
+          <div class="table-wrap"><table><thead><tr><th><label class="episode-choice"><input type="checkbox" id="selectAllEpisodes" aria-label="选择全部可见 Episode"><span>Episode</span></label></th><th>任务</th><th>创建时间</th><th>模态</th><th>时长</th><th>质量</th><th>状态</th><th></th></tr></thead><tbody id="datasetRows"><tr><td colspan="8">等待加载真实数据…</td></tr></tbody></table></div>
         </article>
       </section>
 
@@ -267,9 +239,9 @@
   <dialog id="episodeDialog" class="dialog detail-dialog">
     <form method="dialog">
       <button class="dialog-close" value="cancel" aria-label="关闭"><svg><use href="#i-x"/></svg></button>
-      <p class="eyebrow">EPISODE DETAIL</p><h2 id="detailId">episode_131937_81295016</h2><span class="table-status passed">校验通过</span>
-      <div class="detail-score"><div class="donut small"><span><b>99</b><small>.2</small></span></div><div><b>数据质量优秀</b><p>所有必需话题完整，时间戳连续。</p></div></div>
-      <dl class="detail-list"><div><dt>任务</dt><dd>pick_and_place</dd></div><div><dt>采集员</dt><dd>zxcx</dd></div><div><dt>机器人</dt><dd>M6S-Lite-CCS-680-B</dd></div><div><dt>数据模态</dt><dd>视觉 · 触觉 · 关节 · PICO</dd></div><div><dt>对齐时钟</dt><dd>CLOCK_MONOTONIC</dd></div><div><dt>数据文件</dt><dd>data/*.mcap · 5.2 GB</dd></div></dl>
+      <p class="eyebrow">EPISODE DETAIL</p><h2 id="detailId">—</h2><span class="table-status review" id="detailStatus">—</span>
+      <div class="detail-score"><div class="donut small"><span><b id="detailQuality">—</b></span></div><div><b id="detailAssessment">等待数据</b><p>质量分仅显示 manifest 中的真实值。</p></div></div>
+      <dl class="detail-list"><div><dt>任务</dt><dd id="detailTask">—</dd></div><div><dt>采集员</dt><dd id="detailOperator">—</dd></div><div><dt>机器人</dt><dd id="detailRobot">—</dd></div><div><dt>数据模态</dt><dd id="detailModalities">—</dd></div><div><dt>采集时长</dt><dd id="detailDuration">—</dd></div><div><dt>实际数据量</dt><dd id="detailSize">—</dd></div></dl>
       <div class="dialog-actions split"><button class="button danger" type="button" id="deleteFromDetail"><svg><use href="#i-trash"/></svg>删除</button><span></span><button class="button secondary" type="button" id="openDirectoryFromDetail"><svg><use href="#i-folder"/></svg>打开目录</button><button class="button primary">进入复核</button></div>
     </form>
   </dialog>
@@ -286,6 +258,6 @@
   </dialog>
 
   <div class="toast" id="toast" role="status"><svg><use href="#i-check"/></svg><span>链路检测完成，全部正常</span></div>
-  <script src="app.js"></script>
+  <script src="app.js?v=20260904"></script>
 </body>
 </html>
