@@ -14,10 +14,11 @@ from xr_marvin_teleop.common.xr_target_mapper import (
     XrTargetMapper,
     transform_controller_poses_to_marvin_frame,
 )
-
-
-DEFAULT_JOINT_K = (4.0, 4.0, 3.0, 3.0, 1.0, 1.0, 1.0)
+# 拿酸梅汤不会抖的参数（有待优化）
+DEFAULT_JOINT_K = (4.0, 4.0, 4.0, 2.0, 2.0, 2.0, 2.0)
 DEFAULT_JOINT_D = (0.3, 0.3, 0.3, 0.3, 0.2, 0.2, 0.2)
+# DEFAULT_JOINT_K = (4.0, 4.0, 3.0, 3.0, 1.0, 1.0, 1.0)
+# DEFAULT_JOINT_D = (0.3, 0.3, 0.3, 0.3, 0.2, 0.2, 0.2)
 DEFAULT_CONTROL_HZ = 50
 DEFAULT_JOINT_VELOCITY_RATIO = 10
 DEFAULT_JOINT_ACCELERATION_RATIO = 10
