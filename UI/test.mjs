@@ -43,8 +43,8 @@ try {
 
   await evaluate('new Promise(r=>{const wait=setInterval(()=>{if(document.readyState==="complete"&&typeof askDelete==="function"){clearInterval(wait);r(true)}},20)})');
   assert.deepEqual(
-    await evaluate('({sections:document.querySelectorAll("#view-workbench .usage-guide section").length,pico:document.querySelector("#view-workbench .usage-guide").textContent.includes("Network=WORKING"),enter:document.querySelector("#view-workbench .usage-guide").textContent.includes("Enter")})'),
-    { sections: 2, pico: true, enter: true },
+    await evaluate('({sections:document.querySelectorAll("#view-workbench .usage-guide section").length,pico:document.querySelector("#view-workbench .usage-guide").textContent.includes("Network=WORKING"),devices:document.querySelector("#view-workbench .usage-guide").textContent.includes("启动设备")})'),
+    { sections: 2, pico: true, devices: true },
   );
   await evaluate('renderEpisodes([{id:"episode_131937_81295016",task:"pick_and_place",operator:"zxcx",robot_model:"M6S-Lite-CCS-680-B",status:"degraded",duration_seconds:115,size_bytes:5583457485,created_at:"2026-09-03T13:19:00+08:00",modalities:["关节","PICO","触觉","视觉"]}])');
   assert.equal(await evaluate('document.querySelector("#view-datasets thead").textContent.includes("状态")'), false);
@@ -75,8 +75,8 @@ try {
   assert.deepEqual(await evaluate('({images:document.querySelectorAll(".camera-preview").length,active:document.querySelectorAll(".preview-ready").length})'), { images: 2, active: 0 });
   assert.deepEqual(await evaluate('({marvin:marvinStreamHealth.textContent,das:dasStreamHealth.textContent,vision:visionHealth.textContent})'), { marvin: "离线", das: "离线", vision: "离线" });
   assert.deepEqual(
-    await evaluate('({offline:picoConnection.classList.contains("disconnected"),disabled:startButton.disabled})'),
-    { offline: true, disabled: true },
+    await evaluate('({offline:picoConnection.classList.contains("disconnected"),devicesDisabled:deviceButton.disabled,recordDisabled:recordButton.disabled})'),
+    { offline: true, devicesDisabled: true, recordDisabled: true },
   );
   assert.equal(await evaluate('monitorErrors.classList.contains("clear")'), false);
   assert.equal(await evaluate('picoConnection.click();new Promise(r=>setTimeout(()=>r(picoConnection.classList.contains("disconnected")),20))'), true);
@@ -85,11 +85,15 @@ try {
   assert.equal(await evaluate('collectionError="遥操进程异常退出：测试故障";renderMonitorErrors();monitorErrorList.textContent.includes("测试故障")'), true);
   await evaluate('collectionError="";renderMonitorErrors()');
   assert.deepEqual(
-    await evaluate('document.querySelector("[name=task]").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true,cancelable:true}));({confirmation:!!document.querySelector("#safetyDialog"),recording:startButton.classList.contains("recording"),resetEnabled:!document.querySelector("#resetRobot").disabled})'),
-    { confirmation: false, recording: true, resetEnabled: false },
+    await evaluate('deviceButton.click();({devices:deviceButton.classList.contains("devices-active"),recordEnabled:!recordButton.disabled})'),
+    { devices: true, recordEnabled: true },
+  );
+  assert.deepEqual(
+    await evaluate('document.querySelector("[name=task]").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true,cancelable:true}));({confirmation:!!document.querySelector("#safetyDialog"),recording:recordButton.classList.contains("recording"),deviceDisabled:deviceButton.disabled,resetEnabled:!document.querySelector("#resetRobot").disabled})'),
+    { confirmation: false, recording: true, deviceDisabled: true, resetEnabled: false },
   );
   assert.equal(await evaluate('requestRobotReset();document.querySelector("#toast span").textContent'), "机器人复位需要启动 UI 后端");
-  await evaluate('startButton.click()');
+  await evaluate('recordButton.click();deviceButton.click()');
   socket.close();
   console.log("UI interaction check passed");
 } finally {

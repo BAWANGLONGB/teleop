@@ -46,6 +46,7 @@ RESET_LOCK = threading.Lock()
 PICO_LOCK = threading.Lock()
 ERROR_LOCK = threading.Lock()
 COLLECTION = None
+DEVICES = None
 LAST_STATUS_ERRORS = {}
 
 
@@ -399,6 +400,7 @@ def hardware_status():
     camera_ready = {side: paths["camera"].exists() for side, paths in sides.items()}
     status = {
         "collection_active": collection_active(),
+        "devices_active": devices_active(),
         "processes": {
             "marvin": marvin_connected,
             "das": all(serial_ready.values()),
@@ -438,28 +440,44 @@ def hardware_status():
     return status
 
 
+def _job_status(job):
+    if not job:
+        return {"active": False, "status": "idle"}
+    active = job["process"].poll() is None
+    if active and job["status"] == "starting" and job["ready_file"].is_file():
+        job["status"] = "running"
+    return {
+        "active": active,
+        "status": job["status"],
+        "task": job["task"],
+        "started_at": job["started_at"],
+        "returncode": job.get("returncode"),
+        "error": job.get("error"),
+        "log": str(job["log"]),
+        "max_duration": job.get("max_duration"),
+    }
+
+
 def collection_status():
     with STATE_LOCK:
-        job = COLLECTION
-        if not job:
-            return {"active": False, "status": "idle"}
-        return {
-            "active": job["process"].poll() is None,
-            "status": job["status"],
-            "task": job["task"],
-            "started_at": job["started_at"],
-            "returncode": job.get("returncode"),
-            "error": job.get("error"),
-            "log": str(job["log"]),
-            "max_duration": job.get("max_duration"),
-        }
+        return _job_status(COLLECTION)
+
+
+def device_status():
+    with STATE_LOCK:
+        return _job_status(DEVICES)
 
 
 def collection_active():
     return collection_status()["active"]
 
 
-def collection_exit_error(log_path, returncode):
+def devices_active(ready=False):
+    status = device_status()
+    return status["active"] and (not ready or status["status"] == "running")
+
+
+def collection_exit_error(log_path, returncode, label="进程"):
     try:
         with log_path.open("rb") as log:
             log.seek(0, os.SEEK_END)
@@ -471,31 +489,47 @@ def collection_exit_error(log_path, returncode):
         (line.strip() for line in reversed(lines) if re.search(r"error|exception|failed|traceback", line, re.IGNORECASE)),
         "",
     )
-    message = f"遥操进程异常退出（退出码 {returncode}）"
+    message = f"{label}异常退出（退出码 {returncode}）"
     return f"{message}：{detail[:600]}" if detail else message
 
 
-def _watch_collection(process, config_path):
+def _watch_job(part, process, config_path, ready_file):
     returncode = process.wait()
     config_path.unlink(missing_ok=True)
-    for side in ("left", "right"):
-        try:
-            (PREVIEW_ROOT / f"{side}.jpg").unlink(missing_ok=True)
-        except OSError:
-            pass
+    ready_file.unlink(missing_ok=True)
+    if part == "recording":
+        for side in ("left", "right"):
+            try:
+                (PREVIEW_ROOT / f"{side}.jpg").unlink(missing_ok=True)
+            except OSError:
+                pass
     with STATE_LOCK:
-        if COLLECTION and COLLECTION["process"] is process:
-            COLLECTION["status"] = "completed" if returncode == 0 else "failed"
-            COLLECTION["returncode"] = returncode
-            COLLECTION["error"] = None if returncode == 0 else collection_exit_error(COLLECTION["log"], returncode)
-            print_status_error("遥操", COLLECTION["error"])
+        job = COLLECTION if part == "recording" else DEVICES
+        if job and job["process"] is process:
+            job["status"] = "completed" if returncode == 0 else "failed"
+            job["returncode"] = returncode
+            job["error"] = None if returncode == 0 else collection_exit_error(
+                job["log"], returncode, "录制进程" if part == "recording" else "设备进程"
+            )
+            print_status_error("录制" if part == "recording" else "设备", job["error"])
+    if part == "devices" and collection_active():
+        stop_collection()
 
 
 def start_collection(payload):
     if not START_LOCK.acquire(blocking=False):
-        raise ApiError(HTTPStatus.CONFLICT, "采集任务正在启动")
+        raise ApiError(HTTPStatus.CONFLICT, "录制任务正在启动")
     try:
-        return _start_collection(payload)
+        return _start_collection(payload, "recording")
+    finally:
+        START_LOCK.release()
+
+
+def start_devices(payload):
+    if not START_LOCK.acquire(blocking=False):
+        raise ApiError(HTTPStatus.CONFLICT, "设备或录制任务正在启动")
+    try:
+        return _start_collection(payload, "devices")
     finally:
         START_LOCK.release()
 
@@ -504,11 +538,11 @@ def request_robot_reset():
     if not RESET_LOCK.acquire(blocking=False):
         raise ApiError(HTTPStatus.CONFLICT, "机器人正在复位")
     try:
-        if START_LOCK.locked() or collection_active() or any(
+        if START_LOCK.locked() or collection_active() or devices_active() or any(
             process_running(name)
             for name in ("run_collection.py", "record_episode.py")
         ):
-            raise ApiError(HTTPStatus.CONFLICT, "数采过程中不能单独复位机器人")
+            raise ApiError(HTTPStatus.CONFLICT, "设备或录制运行中不能单独复位机器人")
         if process_running("teleop_marvin_hardware.py"):
             raise ApiError(HTTPStatus.CONFLICT, "调试控制进程正在占用机器人")
         if not RESET_SCRIPT.is_file() or not TELEOP_PYTHON.is_file():
@@ -550,15 +584,22 @@ def request_robot_reset():
         RESET_LOCK.release()
 
 
-def _start_collection(payload):
-    global COLLECTION
+def _start_collection(payload, part):
+    global COLLECTION, DEVICES
     if RESET_LOCK.locked():
         raise ApiError(HTTPStatus.CONFLICT, "机器人正在复位")
-    if collection_active():
-        raise ApiError(HTTPStatus.CONFLICT, "已有采集任务正在运行")
-    for confirmation in ("confirmed_estop", "confirmed_joint_mapping", "confirmed_workspace_clear"):
-        if payload.get(confirmation) is not True:
-            raise ApiError(HTTPStatus.BAD_REQUEST, "必须逐项完成现场安全确认")
+    if part == "devices" and devices_active():
+        raise ApiError(HTTPStatus.CONFLICT, "设备已经启动")
+    if part == "devices" and collection_active():
+        raise ApiError(HTTPStatus.CONFLICT, "请先停止当前录制")
+    if part == "recording" and collection_active():
+        raise ApiError(HTTPStatus.CONFLICT, "已有录制任务正在运行")
+    if part == "recording" and not devices_active(ready=True):
+        raise ApiError(HTTPStatus.CONFLICT, "设备尚未就绪，请先启动设备")
+    if part == "devices":
+        for confirmation in ("confirmed_estop", "confirmed_joint_mapping", "confirmed_workspace_clear"):
+            if payload.get(confirmation) is not True:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "必须逐项完成现场安全确认")
     task = str(payload.get("task", "")).strip()
     operator = str(payload.get("operator", "")).strip()
     robot = str(payload.get("robot_model", "")).strip()
@@ -574,7 +615,7 @@ def _start_collection(payload):
     if resolution not in KNOWN_CAMERA_FORMATS or fps not in KNOWN_CAMERA_FORMATS[resolution]:
         raise ApiError(HTTPStatus.BAD_REQUEST, "相机分辨率与帧率组合不受支持")
     environment = teleop_environment().copy()
-    if process_running("publish_pico.py"):
+    if part == "devices" and process_running("publish_pico.py"):
         raise ApiError(HTTPStatus.CONFLICT, "外部 PICO 发布器仍在运行，请先停止以避免设备冲突")
     temporary = tempfile.NamedTemporaryFile(prefix="fieldnote-das-", suffix=".json", delete=False)
     temporary.close()
@@ -585,7 +626,7 @@ def _start_collection(payload):
         config_path.unlink(missing_ok=True)
         raise
     preview_root = None
-    if payload.get("no_vision") is not True:
+    if part == "recording" and payload.get("no_vision") is not True:
         try:
             PREVIEW_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
             if not PREVIEW_ROOT.is_symlink():
@@ -597,15 +638,19 @@ def _start_collection(payload):
             print_status_error("相机预览", str(error))
     command = [
         str(TELEOP_PYTHON if TELEOP_PYTHON.is_file() else Path(sys.executable)), str(COLLECTION_SCRIPT),
+        "--part", part,
         "--task", task, "--operator", operator, "--robot-model", robot,
         "--enable-hardware", "--confirmed-estop", "--confirmed-joint-mapping",
         "--das-config", str(config_path), "--das-sdk-root", str(DAS_SDK_ROOT),
         "--scale-calibration-path", str(SCALE_CALIBRATION),
     ]
+    ready_file = config_path.with_suffix(".ready")
+    ready_file.unlink(missing_ok=True)
+    command += ["--ready-file", str(ready_file)]
     if preview_root is not None:
         command += ["--preview-root", str(preview_root)]
     duration = payload.get("max_duration")
-    if duration not in (None, ""):
+    if part == "recording" and duration not in (None, ""):
         try:
             duration = float(duration)
         except (TypeError, ValueError) as error:
@@ -617,9 +662,9 @@ def _start_collection(payload):
         command += ["--max-duration", str(duration)]
     if payload.get("no_vision") is True:
         command.append("--no-vision")
-    if payload.get("nsp_lateral") is True:
+    if part == "devices" and payload.get("nsp_lateral") is True:
         command.append("--nsp-lateral")
-    log_path = PROJECT_ROOT / "logs" / f"ui_collection_{datetime.now():%Y%m%d_%H%M%S}.log"
+    log_path = PROJECT_ROOT / "logs" / f"ui_{part}_{datetime.now():%Y%m%d_%H%M%S}.log"
     log_path.parent.mkdir(exist_ok=True)
     with log_path.open("ab", buffering=0) as log:
         try:
@@ -633,20 +678,30 @@ def _start_collection(payload):
             )
         except OSError:
             config_path.unlink(missing_ok=True)
+            ready_file.unlink(missing_ok=True)
             raise
+    job = {
+        "process": process,
+        "task": task,
+        "status": "starting",
+        "started_at": time.time(),
+        "log": log_path,
+        "ready_file": ready_file,
+        "vision_enabled": payload.get("no_vision") is not True,
+        "max_duration": duration,
+    }
     with STATE_LOCK:
-        COLLECTION = {
-            "process": process,
-            "task": task,
-            "status": "starting",
-            "started_at": time.time(),
-            "log": log_path,
-            "vision_enabled": payload.get("no_vision") is not True,
-            "max_duration": duration,
-        }
-    print_status_error("遥操", None)
-    threading.Thread(target=_watch_collection, args=(process, config_path), daemon=True).start()
-    return collection_status()
+        if part == "recording":
+            COLLECTION = job
+        else:
+            DEVICES = job
+    print_status_error("录制" if part == "recording" else "设备", None)
+    threading.Thread(
+        target=_watch_job,
+        args=(part, process, config_path, ready_file),
+        daemon=True,
+    ).start()
+    return collection_status() if part == "recording" else device_status()
 
 
 def stop_collection():
@@ -663,14 +718,30 @@ def stop_collection():
     return collection_status()
 
 
+def stop_devices():
+    if collection_active():
+        raise ApiError(HTTPStatus.CONFLICT, "请先停止录制并等待保存完成")
+    with STATE_LOCK:
+        job = DEVICES
+        if not job or job["process"].poll() is not None:
+            raise ApiError(HTTPStatus.CONFLICT, "设备尚未启动")
+        job["status"] = "stopping"
+        process = job["process"]
+    try:
+        os.killpg(process.pid, signal.SIGINT)
+    except ProcessLookupError:
+        pass
+    return device_status()
+
+
 def restart_pico():
     with PICO_LOCK:
         return _restart_pico()
 
 
 def _restart_pico():
-    if collection_active():
-        raise ApiError(HTTPStatus.CONFLICT, "采集中不能重连 PICO")
+    if collection_active() or devices_active():
+        raise ApiError(HTTPStatus.CONFLICT, "设备运行中不能重连 PICO")
     if not ROBOTICS_SERVICE_SCRIPT.is_file():
         raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "Robotics Service 启动脚本不存在")
     service_started = False
@@ -806,7 +877,11 @@ class Handler(SimpleHTTPRequestHandler):
             return self.handle_api(lambda: self.send_mcap_export(query.get("episode", [])))
         if request.path == "/api/status":
             usage = shutil.disk_usage(DATASET_ROOT if DATASET_ROOT.exists() else PROJECT_ROOT)
-            return self.send_json({"collection": collection_status(), "disk_free_bytes": usage.free})
+            return self.send_json({
+                "devices": device_status(),
+                "collection": collection_status(),
+                "disk_free_bytes": usage.free,
+            })
         if request.path == "/api/devices/pico":
             return self.send_json(pico_status())
         if request.path == "/api/devices/cameras/formats":
@@ -836,6 +911,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self.handle_api(lambda: self.send_json(start_collection(self.read_body()), HTTPStatus.ACCEPTED))
         if path == "/api/episodes/active/stop":
             return self.handle_api(lambda: self.send_json(stop_collection(), HTTPStatus.ACCEPTED))
+        if path == "/api/devices/start":
+            return self.handle_api(lambda: self.send_json(start_devices(self.read_body()), HTTPStatus.ACCEPTED))
+        if path == "/api/devices/stop":
+            return self.handle_api(lambda: self.send_json(stop_devices(), HTTPStatus.ACCEPTED))
         if path == "/api/robot/reset":
             return self.handle_api(lambda: self.send_json(request_robot_reset()))
         if path == "/api/devices/pico/reconnect":
@@ -890,6 +969,21 @@ def self_test():
         probe.wait()
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary) / "dataset"
+        ready_file = Path(temporary) / "job.ready"
+        process = type("RunningProcess", (), {"poll": lambda self: None})()
+        job = {
+            "process": process,
+            "task": "test",
+            "status": "starting",
+            "started_at": 0,
+            "log": Path(temporary) / "job.log",
+            "ready_file": ready_file,
+        }
+        assert _job_status(job)["status"] == "starting"
+        ready_file.touch()
+        assert _job_status(job)["status"] == "running"
+        job["status"] = "stopping"
+        assert _job_status(job)["status"] == "stopping"
         episode = root / "session_2026-09-03" / "episode_120000_deadbeef"
         episode.mkdir(parents=True)
         (episode / "metadata.json").write_text("{}", encoding="utf-8")
@@ -947,6 +1041,9 @@ def main():
         server.server_close()
         if collection_active():
             stop_collection()
+            COLLECTION["process"].wait()
+        if devices_active():
+            stop_devices()
 
 
 if __name__ == "__main__":

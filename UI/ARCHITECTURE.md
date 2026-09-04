@@ -50,6 +50,8 @@ GET    /api/devices/pico             PICO 服务端口与 TCP 客户端状态
 POST   /api/devices/pico/reconnect   启动 PC Service 并等待端口就绪
 GET    /api/devices/cameras/formats  左右 V4L2 能力的交集
 GET    /api/devices/hardware         Marvin、双侧夹爪与双目相机实时状态
+POST   /api/devices/start            启动并监管 PICO、DAS 与 Marvin
+POST   /api/devices/stop             停止设备；活动录制存在时拒绝
 GET    /api/preview/{left|right}.jpg  采集中最近一帧原生 JPEG
 GET    /api/episodes?status=&q=      从 manifest.json 建立列表
 GET    /api/exports/mcap?episode=... 流式导出选中的标准化 MCAP
@@ -67,7 +69,7 @@ DELETE /api/episodes/{id}            原子移动至 dataset/.trash/
 
 机器人复位仅在数采和遥操调试进程均未运行时启动一次性 `reset_marvin_hardware.py`，由它独占 Marvin SDK，以默认 3 秒余弦轨迹回到 `MARVIN_INITIAL_POSE_Q_RAD`，确认到位后释放连接并退出。
 
-API 将选择的 `camera_resolution` 与 `camera_fps` 写入本次作业专用 DAS 配置快照，再交给现有编排器，不修改全局标定文件。开始按钮不再弹出确认框，直接把当前表单与现有编排器要求的硬件预检参数提交给服务端。
+API 将选择的 `camera_resolution` 与 `camera_fps` 写入本次作业专用 DAS 配置快照，再交给现有编排器，不修改全局标定文件。“启动设备”和“开始录制”分别调用编排器的 `devices` 与 `recording` 模式；设备 ready-file 出现前禁止开始录制。
 
 实时预览不重复打开相机：`capture_das_mjpeg.py` 写入原始帧后，以最高 30 FPS 原子更新 `/dev/shm/fieldnote-preview-<uid>/left.jpg|right.jpg`。共享内存或浏览器异常时只禁用预览，不影响采集；HTTP 服务只读快照，采集停止后清理。
 
@@ -82,7 +84,7 @@ Robotics Service 就绪以 TCP `63901` 和 `60061` 均处于监听状态为准�
 ## 状态机
 
 ```text
-IDLE → PREFLIGHT → WAITING_DEVICES → RECORDING → FINALIZING → VALIDATING → COMPLETED
+IDLE → STARTING_DEVICES → DEVICES_READY → RECORDING → FINALIZING → DEVICES_READY → IDLE
                     └── timeout ───────────────→ ABORTED
 任意活动状态 ── stop/error ───────────────────→ FINALIZING → ABORTED/REJECTED
 ```

@@ -560,14 +560,14 @@ class TestMarvinHardware(unittest.TestCase):
         )
         hardware_adapter.release()
 
-        def snapshot(timestamp, trigger=0.0, stick_y=0.0):
+        def snapshot(timestamp, trigger=0.0, stick_y=0.0, button_b=False):
             return XrSnapshot(
                 timestamp,
                 make_openxr_pose(),
                 make_openxr_pose(),
                 (0.0, 0.0),
                 False,
-                False,
+                button_b,
                 (trigger, 0.0),
                 (stick_y, 0.0),
             )
@@ -584,6 +584,7 @@ class TestMarvinHardware(unittest.TestCase):
                     snapshot(5, stick_y=-1.0),
                     snapshot(6, stick_y=1.0),
                     snapshot(7, trigger=1.0, stick_y=1.0),
+                    snapshot(8, trigger=1.0, button_b=True),
                 ]
             ),
             adapter=adapter,
@@ -608,11 +609,14 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertEqual(
             adapter.gripper_commands[-1], controller.gripper_closedness
         )
+        controller.execute_control_cycle(0.6)
+        self.assertEqual(controller.gripper_closedness, (1.0, 1.0))
+        self.assertEqual(adapter.gripper_commands[-1], (1.0, 1.0))
         controller.shutdown_hardware()
         event_names = [name for name, _payload in telemetry.events]
-        self.assertEqual(event_names.count("pico"), 6)
-        self.assertEqual(event_names.count("marvin"), 6)
-        self.assertEqual(event_names.count("joint_command"), 7)
+        self.assertEqual(event_names.count("pico"), 7)
+        self.assertEqual(event_names.count("marvin"), 7)
+        self.assertEqual(event_names.count("joint_command"), 8)
         self.assertIn("gripper_command", event_names)
         self.assertTrue(telemetry.closed)
 
@@ -1068,24 +1072,30 @@ class TestMarvinHardware(unittest.TestCase):
             / "run_collection.py"
         )
         namespace = runpy.run_path(str(entry_path))
-        arguments = namespace["parse_command_line_arguments"](
-            [
-                "--task",
-                "pick",
-                "--robot-model",
-                "M6S",
-                "--enable-hardware",
-                "--confirmed-estop",
-                "--confirmed-joint-mapping",
-                "--das-config",
-                "das.json",
-                "--das-sdk-root",
-                "das-sdk",
-                "--preview-root",
-                "/dev/shm/fieldnote-preview-test",
-            ]
-        )
+        command_line = [
+            "--task",
+            "pick",
+            "--robot-model",
+            "M6S",
+            "--enable-hardware",
+            "--confirmed-estop",
+            "--confirmed-joint-mapping",
+            "--das-config",
+            "das.json",
+            "--das-sdk-root",
+            "das-sdk",
+            "--preview-root",
+            "/dev/shm/fieldnote-preview-test",
+        ]
+        arguments = namespace["parse_command_line_arguments"](command_line)
         commands = namespace["_build_commands"](arguments)
+        self.assertEqual(arguments.part, "all")
+        self.assertEqual(
+            namespace["parse_command_line_arguments"](
+                ["--part", "devices", *command_line]
+            ).part,
+            "devices",
+        )
         self.assertIn("--pico-from-ros2", commands["hardware"])
         self.assertIn("--ros2", commands["hardware"])
         self.assertIn("--das-from-ros2", commands["hardware"])
@@ -1133,6 +1143,27 @@ class TestMarvinHardware(unittest.TestCase):
                 "pico": 0,
             },
         )
+
+        calls.clear()
+        runtime = namespace["main"].__globals__
+        runtime["_preflight"] = lambda _arguments: None
+        runtime["_build_commands"] = lambda _arguments: {}
+        runtime["_validated_cpu_sets"] = lambda: {}
+        runtime["_start_devices"] = lambda *_arguments: calls.append("devices")
+        runtime["_start_recording"] = lambda *_arguments: calls.append("recording")
+        runtime["_finish_starting_devices"] = lambda *_arguments: calls.append(
+            "hardware"
+        )
+        runtime["_monitor"] = lambda *_arguments: ("signal", 0)
+        runtime["_shutdown_processes"] = lambda *_arguments: {}
+        for part, expected in (
+            ("all", ["devices", "recording", "hardware"]),
+            ("devices", ["devices", "hardware"]),
+            ("recording", ["recording"]),
+        ):
+            calls.clear()
+            self.assertEqual(namespace["main"](["--part", part, *command_line]), 0)
+            self.assertEqual(calls, expected)
 
     def test_optional_ik_nsp_is_initialized_and_angle_is_ramped(self):
         def snapshot(timestamp, grip_values):

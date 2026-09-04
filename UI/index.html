@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#151a17">
   <title>XRTELEOP · 机器人数据采集平台</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260904-4">
 </head>
 <body>
   <svg class="svg-sprite" aria-hidden="true">
@@ -111,7 +111,10 @@
                 </div>
                 <label class="switch-row"><span><b>NSP 肘部映射</b><small>保持普通 IK 回退</small></span><input type="checkbox" id="nspLateral"><i></i></label>
               </fieldset>
-              <button class="button primary launch-button" type="button" id="startButton" disabled><svg><use href="#i-play"/></svg><span>开始采集</span><kbd>Enter</kbd></button>
+              <div class="launch-actions">
+                <button class="button secondary launch-button" type="button" id="deviceButton" disabled><svg><use href="#i-play"/></svg><span>启动设备</span></button>
+                <button class="button primary launch-button" type="button" id="recordButton" disabled><svg><use href="#i-play"/></svg><span>开始录制</span></button>
+              </div>
               <p class="safety-note"><svg><use href="#i-check"/></svg>启动前仍需现场确认急停与关节映射</p>
             </form>
           </aside>
@@ -135,8 +138,8 @@
               <ol>
                 <li>确认 PICO、机械臂、夹爪和相机状态，完成现场安全检查。</li>
                 <li>填写任务名称、采集员和机器人型号，按需选择视觉、分辨率及最长时长。</li>
-                <li>焦点位于采集配置时按 <code>Enter</code>，或点击“开始采集”。</li>
-                <li>通过实时预览和错误信息监督采集；点击“停止并保存”或按 <code>Esc</code> 安全收尾。</li>
+                <li>点击“启动设备”，等待设备就绪后按 <code>Enter</code> 或点击“开始录制”。</li>
+                <li>点击“停止并保存”或按 <code>Esc</code> 完成本段录制；最后点击“停止设备”。</li>
                 <li>在“数据集”搜索、查看、导出或将 Episode 移入回收站。</li>
               </ol>
             </section>
@@ -207,6 +210,6 @@
   </dialog>
 
   <div class="toast" id="toast" role="status"><svg><use href="#i-check"/></svg><span>链路检测完成，全部正常</span></div>
-  <script src="app.js?v=20260904-3"></script>
+  <script src="app.js?v=20260904-4"></script>
 </body>
 </html>

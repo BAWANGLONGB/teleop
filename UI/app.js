@@ -15,8 +15,10 @@ let picoConnected = false;
 let lastPicoStatus = { connected: false };
 let lastHardwareStatus = null;
 let hardwareRequestError = "";
+let deviceError = "";
 let collectionError = "";
 let robotResetPending = false;
+let devicesReady = false;
 const previewFps = 30;
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -46,7 +48,8 @@ function showToast(message) {
 
 function renderMonitorErrors() {
   const errors = [];
-  if (collectionError) errors.push(`遥操：${collectionError}`);
+  if (deviceError) errors.push(`设备：${deviceError}`);
+  if (collectionError) errors.push(`录制：${collectionError}`);
   if (lastPicoStatus.error) errors.push(`PICO：${lastPicoStatus.error}`);
   if (hardwareRequestError) errors.push(`设备监测：${hardwareRequestError}`);
   if (lastHardwareStatus) {
@@ -80,8 +83,32 @@ function elapsed() {
     .map((part) => String(part).padStart(2, "0")).join(":");
 }
 
-function syncResetButton(recording = $("#startButton").classList.contains("recording")) {
-  $("#resetRobot").disabled = robotResetPending || recording || !lastHardwareStatus?.marvin.connected;
+function devicesActive() {
+  return $("#deviceButton").classList.contains("devices-active");
+}
+
+function recordingActive() {
+  return $("#recordButton").classList.contains("recording");
+}
+
+function syncActionButtons() {
+  $("#deviceButton").disabled = recordingActive() || (!devicesActive() && !picoConnected);
+  $("#recordButton").disabled = !recordingActive() && !devicesReady;
+}
+
+function syncResetButton() {
+  $("#resetRobot").disabled = robotResetPending || devicesActive() || recordingActive() || !lastHardwareStatus?.marvin.connected;
+}
+
+function setDevices(active, ready = active, notify = true) {
+  const button = $("#deviceButton");
+  devicesReady = active && ready;
+  button.classList.toggle("devices-active", active);
+  $("span", button).textContent = active ? "停止设备" : "启动设备";
+  $("use", button).setAttribute("href", active ? "#i-stop" : "#i-play");
+  syncActionButtons();
+  syncResetButton();
+  if (notify) showToast(active ? "设备启动中，等待数据流就绪" : "设备停止信号已发送");
 }
 
 function setCameraPreview(active) {
@@ -115,33 +142,33 @@ function setCameraPreview(active) {
 }
 
 function setRecording(active, startedAt = Date.now(), notify = true) {
-  const button = $("#startButton");
+  const button = $("#recordButton");
   const live = $("#liveState");
   clearInterval(timerHandle);
-  button.disabled = !active && !picoConnected;
-  syncResetButton(active);
   setCameraPreview(active);
   if (active) {
     recordingStarted = startedAt;
     button.classList.add("recording");
     $("span", button).textContent = "停止并保存";
     $("use", button).setAttribute("href", "#i-stop");
-    $("kbd", button).textContent = "ESC";
     live.classList.add("recording");
     $("span", live).textContent = "RECORDING";
     $("#monitorTitle").textContent = $("[name=task]").value || "未命名任务";
     $("#sessionTimer").textContent = elapsed();
     timerHandle = setInterval(() => $("#sessionTimer").textContent = elapsed(), 250);
-    if (notify) showToast("采集进程已启动，正在等待所有数据流就绪");
+    syncActionButtons();
+    syncResetButton();
+    if (notify) showToast("录制进程已启动");
     return;
   }
   button.classList.remove("recording");
-  $("span", button).textContent = "开始采集";
+  $("span", button).textContent = "开始录制";
   $("use", button).setAttribute("href", "#i-play");
-  $("kbd", button).textContent = "Enter";
   live.classList.remove("recording");
   $("span", live).textContent = "FINALIZING";
-  if (notify) showToast("停止信号已发送，正在安全收尾并校验数据");
+  syncActionButtons();
+  syncResetButton();
+  if (notify) showToast("录制停止信号已发送，正在安全收尾并校验数据");
   setTimeout(() => {
     $("span", live).textContent = "STANDBY";
     $("#monitorTitle").textContent = "等待采集";
@@ -174,7 +201,7 @@ function setPicoStatus(status, data = {}) {
   $("#picoStreamLatency").textContent = status === "connected" ? clients : "—";
   $("#picoStreamHealth").className = health.className;
   $("#picoStreamHealth").textContent = status === "connected" ? "稳定" : state[2];
-  $("#startButton").disabled = status !== "connected" && !$("#startButton").classList.contains("recording");
+  syncActionButtons();
   updateDeviceSummary();
   renderMonitorErrors();
 }
@@ -242,7 +269,7 @@ async function syncHardwareStatus(notify = false) {
 }
 
 async function checkPico(reconnect = false, silent = false) {
-  if (reconnect && $("#startButton").classList.contains("recording")) return showToast("采集中不能重连 PICO，请先停止当前 Episode");
+  if (reconnect && (devicesActive() || recordingActive())) return showToast("设备运行中不能重连 PICO");
   const button = $("#reconnectPico");
   if (!silent) setPicoStatus("checking");
   if (!silent || reconnect) {
@@ -418,10 +445,9 @@ async function openEpisodeDirectory(episodeId) {
   }
 }
 
-async function startCollection() {
-  if (!useApi) return setRecording(true);
+function collectionPayload() {
   const form = new FormData($("#collectionForm"));
-  const payload = {
+  return {
     task: form.get("task"), operator: form.get("operator"), robot_model: form.get("robot"),
     max_duration: form.get("duration") || null,
     camera_resolution: form.get("camera_resolution") || "640x480",
@@ -430,14 +456,44 @@ async function startCollection() {
     nsp_lateral: $("#nspLateral").checked,
     confirmed_estop: true, confirmed_joint_mapping: true, confirmed_workspace_clear: true,
   };
-  $("#startButton").disabled = true;
+}
+
+async function startDevices() {
+  if (!useApi) return setDevices(true);
+  $("#deviceButton").disabled = true;
   try {
-    const job = await api("/api/episodes", { method: "POST", body: JSON.stringify(payload) });
+    const job = await api("/api/devices/start", { method: "POST", body: JSON.stringify(collectionPayload()) });
+    deviceError = "";
+    renderMonitorErrors();
+    setDevices(true, job.status === "running");
+  } catch (error) {
+    syncActionButtons();
+    showToast(error.message);
+  }
+}
+
+async function stopDevices() {
+  if (!useApi) return setDevices(false);
+  $("#deviceButton").disabled = true;
+  try {
+    await api("/api/devices/stop", { method: "POST", body: "{}" });
+    setDevices(false);
+  } catch (error) {
+    syncActionButtons();
+    showToast(error.message);
+  }
+}
+
+async function startRecording() {
+  if (!useApi) return setRecording(true);
+  $("#recordButton").disabled = true;
+  try {
+    const job = await api("/api/episodes", { method: "POST", body: JSON.stringify(collectionPayload()) });
     collectionError = "";
     renderMonitorErrors();
     setRecording(true, job.started_at * 1000);
   } catch (error) {
-    $("#startButton").disabled = false;
+    syncActionButtons();
     showToast(error.message);
   }
 }
@@ -457,14 +513,14 @@ async function requestRobotReset() {
   }
 }
 
-async function stopCollection() {
+async function stopRecording() {
   if (!useApi) return setRecording(false);
-  $("#startButton").disabled = true;
+  $("#recordButton").disabled = true;
   try {
     await api("/api/episodes/active/stop", { method: "POST", body: "{}" });
     setRecording(false);
   } catch (error) {
-    $("#startButton").disabled = false;
+    syncActionButtons();
     showToast(error.message);
   }
 }
@@ -472,18 +528,28 @@ async function stopCollection() {
 async function syncCollectionStatus() {
   if (!useApi) return;
   try {
-    const { collection } = await api("/api/status");
+    const { devices, collection } = await api("/api/status");
+    deviceError = devices.status === "failed"
+      ? devices.error || `设备进程异常退出（退出码 ${devices.returncode ?? "未知"}），日志：${devices.log}`
+      : "";
     collectionError = collection.status === "failed"
-      ? collection.error || `遥操进程异常退出（退出码 ${collection.returncode ?? "未知"}），日志：${collection.log}`
+      ? collection.error || `录制进程异常退出（退出码 ${collection.returncode ?? "未知"}），日志：${collection.log}`
       : "";
     renderMonitorErrors();
-    const shownActive = $("#startButton").classList.contains("recording");
+    const shownDevices = devicesActive();
+    if (devices.active) {
+      setDevices(true, devices.status === "running", false);
+    } else if (shownDevices) {
+      setDevices(false, false, false);
+      showToast(devices.status === "failed" ? deviceError : "设备已停止");
+    }
+    const shownActive = recordingActive();
     if (collection.active && !shownActive) {
       $("[name=task]").value = collection.task;
       setRecording(true, collection.started_at * 1000, false);
     } else if (!collection.active && shownActive) {
       setRecording(false, Date.now(), false);
-      showToast(collection.status === "failed" ? collectionError : "采集已完成并保存");
+      showToast(collection.status === "failed" ? collectionError : "录制已完成并保存");
       loadEpisodes();
     }
   } catch { /* Keep the current state during a transient server failure. */ }
@@ -492,7 +558,7 @@ async function syncCollectionStatus() {
 $$('[data-nav]').forEach((item) => item.addEventListener("click", (event) => { event.preventDefault(); openView(item.dataset.nav); }));
 $("#menuButton").addEventListener("click", () => $(".sidebar").classList.toggle("open"));
 $("#runCheck").addEventListener("click", async (event) => {
-  if ($("#startButton").classList.contains("recording")) return showToast("采集中不能执行全链路自检");
+  if (recordingActive()) return showToast("采集中不能执行全链路自检");
   const button = event.currentTarget;
   button.disabled = true;
   button.textContent = "检测中…";
@@ -501,7 +567,7 @@ $("#runCheck").addEventListener("click", async (event) => {
   button.disabled = false;
 });
 $("#deviceCheck").addEventListener("click", async () => {
-  if ($("#startButton").classList.contains("recording")) return showToast("采集中不能执行全链路自检");
+  if (recordingActive()) return showToast("采集中不能执行全链路自检");
   await Promise.all([checkPico(false, true), syncHardwareStatus(true)]);
 });
 $("#picoConnection").addEventListener("click", () => checkPico(true));
@@ -510,18 +576,22 @@ $("#resetConfig").addEventListener("click", () => { $("#collectionForm").reset()
 $("#visionEnabled").addEventListener("change", syncVisionSettings);
 $("#visionResolution").addEventListener("change", syncVisionSettings);
 
-$("#startButton").addEventListener("click", () => {
-  if ($("#startButton").classList.contains("recording")) return stopCollection();
+$("#deviceButton").addEventListener("click", () => {
+  if (devicesActive()) return stopDevices();
+  startDevices();
+});
+$("#recordButton").addEventListener("click", () => {
+  if (recordingActive()) return stopRecording();
   if (!$("[name=task]").value.trim()) { $("[name=task]").focus(); return showToast("请先填写任务名称"); }
-  startCollection();
+  startRecording();
 });
 $("#resetRobot").addEventListener("click", requestRobotReset);
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && event.target.closest("#collectionForm") && !$("#startButton").classList.contains("recording")) {
+  if (event.key === "Enter" && event.target.closest("#collectionForm") && !recordingActive()) {
     event.preventDefault();
-    $("#startButton").click();
+    $("#recordButton").click();
   }
-  if (event.key === "Escape" && $("#startButton").classList.contains("recording") && !$('dialog[open]')) stopCollection();
+  if (event.key === "Escape" && recordingActive() && !$('dialog[open]')) stopRecording();
 });
 $("#episodeSearch").addEventListener("input", (event) => {
   const query = event.target.value.trim().toLowerCase();

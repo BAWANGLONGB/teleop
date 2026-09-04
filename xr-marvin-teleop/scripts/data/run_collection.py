@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run PICO publishing, episode recording, and hardware control as one job."""
+"""Run device control and episode recording together or independently."""
 
 import argparse
 import math
@@ -35,6 +35,13 @@ def parse_command_line_arguments(arguments=None):
     parser = argparse.ArgumentParser(
         description="Run one ROS2 PICO-Marvin-DAS collection job"
     )
+    parser.add_argument(
+        "--part",
+        choices=("all", "devices", "recording"),
+        default="all",
+        help="run the full job, device lifecycle, or recording lifecycle",
+    )
+    parser.add_argument("--ready-file", type=Path)
     parser.add_argument("--task", required=True)
     parser.add_argument("--operator", default=os.environ.get("USER", "unknown"))
     parser.add_argument("--robot-model", required=True)
@@ -404,6 +411,48 @@ def _wait_for_recorder(process, ready_file, timeout_seconds):
     raise TimeoutError("episode recorder did not become ready")
 
 
+def _start_devices(arguments, commands, cpu_sets, processes):
+    processes["pico"] = _start_process(
+        "PICO publisher", commands["pico"], cpu_sets["pico"]
+    )
+    _wait_for_pico(processes["pico"], arguments.startup_timeout)
+    for side in ("left", "right"):
+        name = f"das_{side}"
+        processes[name] = _start_process(
+            f"DAS {side} source", commands[name], cpu_sets[name]
+        )
+    _wait_for_das(
+        {name: processes[name] for name in ("das_left", "das_right")},
+        arguments.das_config,
+        arguments.startup_timeout,
+    )
+
+
+def _finish_starting_devices(arguments, commands, cpu_sets, processes):
+    if processes["pico"].poll() is not None:
+        raise RuntimeError("PICO publisher stopped before hardware startup")
+    for name in ("das_left", "das_right"):
+        if processes[name].poll() is not None:
+            raise RuntimeError(f"{name} source stopped before hardware startup")
+    processes["hardware"] = _start_process(
+        "Marvin hardware", commands["hardware"], cpu_sets["hardware"]
+    )
+
+
+def _start_recording(arguments, commands, cpu_sets, processes):
+    ready_file = _recorder_ready_file(arguments)
+    ready_file.unlink(missing_ok=True)
+    processes["recorder"] = _start_process(
+        "episode recorder",
+        commands["recorder"],
+        cpu_sets["recorder"],
+        nice=10,
+    )
+    _wait_for_recorder(
+        processes["recorder"], ready_file, arguments.startup_timeout + 2.0
+    )
+
+
 def _signal_process(process, signal_number):
     try:
         os.killpg(process.pid, signal_number)
@@ -456,7 +505,10 @@ def _monitor(processes, stop_requested):
             "recorder",
             "pico",
         ):
-            return_code = processes[name].poll()
+            process = processes.get(name)
+            if process is None:
+                continue
+            return_code = process.poll()
             if return_code is not None:
                 print(f"{name} exited with code {return_code}", flush=True)
                 return name, return_code
@@ -488,41 +540,16 @@ def main(arguments=None):
             previous_handlers[signal_number] = signal.signal(
                 signal_number, request_stop
             )
-        processes["pico"] = _start_process(
-            "PICO publisher", commands["pico"], cpu_sets["pico"]
-        )
-        _wait_for_pico(processes["pico"], parsed.startup_timeout)
-        for side in ("left", "right"):
-            name = f"das_{side}"
-            processes[name] = _start_process(
-                f"DAS {side} source", commands[name], cpu_sets[name]
-            )
-        _wait_for_das(
-            {name: processes[name] for name in ("das_left", "das_right")},
-            parsed.das_config,
-            parsed.startup_timeout,
-        )
-        _recorder_ready_file(parsed).unlink(missing_ok=True)
-        processes["recorder"] = _start_process(
-            "episode recorder",
-            commands["recorder"],
-            cpu_sets["recorder"],
-            nice=10,
-        )
-        _wait_for_recorder(
-            processes["recorder"],
-            _recorder_ready_file(parsed),
-            parsed.startup_timeout + 2.0,
-        )
-        if processes["pico"].poll() is not None:
-            raise RuntimeError("PICO publisher stopped before hardware startup")
-        for name in ("das_left", "das_right"):
-            if processes[name].poll() is not None:
-                raise RuntimeError(f"{name} source stopped before hardware startup")
-        processes["hardware"] = _start_process(
-            "Marvin hardware", commands["hardware"], cpu_sets["hardware"]
-        )
-        print("Collection active; press Ctrl-C once to stop safely", flush=True)
+        if parsed.part != "recording":
+            _start_devices(parsed, commands, cpu_sets, processes)
+        if parsed.part != "devices":
+            _start_recording(parsed, commands, cpu_sets, processes)
+        if parsed.part != "recording":
+            _finish_starting_devices(parsed, commands, cpu_sets, processes)
+        active_name = "Collection" if parsed.part == "all" else parsed.part.capitalize()
+        print(f"{active_name} active; press Ctrl-C once to stop safely", flush=True)
+        if parsed.ready_file is not None:
+            parsed.ready_file.touch()
         exited_name, return_code = _monitor(processes, stop_requested)
         if exited_name in ("pico", "das_left", "das_right"):
             exit_code = return_code or 1
@@ -534,6 +561,8 @@ def main(arguments=None):
     finally:
         shutdown_results = _shutdown_processes(processes)
         _recorder_ready_file(parsed).unlink(missing_ok=True)
+        if parsed.ready_file is not None:
+            parsed.ready_file.unlink(missing_ok=True)
         for signal_number, handler in previous_handlers.items():
             signal.signal(signal_number, handler)
         if any(return_code != 0 for return_code in shutdown_results.values()):

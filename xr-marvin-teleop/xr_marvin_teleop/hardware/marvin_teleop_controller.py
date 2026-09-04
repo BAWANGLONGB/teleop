@@ -564,14 +564,21 @@ class MarvinHardwareTeleopController:
 
         self._previous_grip_states = grip_states
         self._last_commanded_q_rad = q_command_rad
-        return q_command_rad.copy()
+        return q_command_rad.copy(), reset_requested
 
     @staticmethod
     def _deadzone(value, threshold):
         return max(0.0, (value - threshold) / (1.0 - threshold))
 
-    def _update_gripper_command(self, xr_snapshot, cycle_time_seconds):
+    def _update_gripper_command(
+        self, xr_snapshot, cycle_time_seconds, reset_requested=False
+    ):
         if not self.gripper_control_enabled:
+            return
+        if reset_requested:
+            self._gripper_closedness.fill(1.0)
+            self._last_gripper_update_time = cycle_time_seconds
+            self._send_gripper_command(cycle_time_seconds)
             return
         previous_time = self._last_gripper_update_time
         self._last_gripper_update_time = cycle_time_seconds
@@ -614,6 +621,9 @@ class MarvinHardwareTeleopController:
             )
         ) < 0.01:
             return
+        self._send_gripper_command(cycle_time_seconds)
+
+    def _send_gripper_command(self, cycle_time_seconds):
         closedness = tuple(self._gripper_closedness)
         wall_time_ns = time.time_ns()
         steady_ns = time.monotonic_ns()
@@ -769,11 +779,13 @@ class MarvinHardwareTeleopController:
         if not self._xr_frame_available:
             print("PICO XR stream recovered; Grip origins will be re-anchored.")
         self._xr_frame_available = True
-        q_command_rad = self._compute_q_command(
+        q_command_rad, reset_requested = self._compute_q_command(
             xr_snapshot, robot_feedback, float(cycle_time_seconds)
         )
         self._send_joint_command(q_command_rad)
-        self._update_gripper_command(xr_snapshot, float(cycle_time_seconds))
+        self._update_gripper_command(
+            xr_snapshot, float(cycle_time_seconds), reset_requested
+        )
         self._record_control_sample(xr_snapshot, robot_feedback, q_command_rad)
         return q_command_rad
 
