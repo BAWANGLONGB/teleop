@@ -46,12 +46,21 @@ try {
     await evaluate('({sections:document.querySelectorAll("#view-workbench .usage-guide section").length,pico:document.querySelector("#view-workbench .usage-guide").textContent.includes("Network=WORKING"),devices:document.querySelector("#view-workbench .usage-guide").textContent.includes("启动设备")})'),
     { sections: 2, pico: true, devices: true },
   );
-  await evaluate('renderEpisodes([{id:"episode_131937_81295016",task:"pick_and_place",operator:"zxcx",robot_model:"M6S-Lite-CCS-680-B",status:"degraded",duration_seconds:115,size_bytes:5583457485,created_at:"2026-09-03T13:19:00+08:00",modalities:["关节","PICO","触觉","视觉"]}])');
+  await evaluate('window.testEpisodes=[{id:"episode_131937_81295016",session:"session_2026-09-03",task:"pick_and_place",operator:"zxcx",robot_model:"M6S-Lite-CCS-680-B",status:"degraded",duration_seconds:115,size_bytes:5583457485,created_at:"2026-09-03T13:19:00+08:00",modalities:["关节","PICO","触觉","视觉"]},{id:"episode_131938_cafebabe",session:"session_2026-09-04",task:"stack_blocks",operator:"zxcx",robot_model:"M6S-Lite-CCS-680-B",status:"completed",duration_seconds:60,size_bytes:1024,created_at:"2026-09-04T13:19:00+08:00",modalities:["关节"]}];renderEpisodes(testEpisodes)');
+  assert.deepEqual(
+    await evaluate('sessionFilter.value="session_2026-09-03";sessionFilter.dispatchEvent(new Event("change"));({options:sessionFilter.options.length,visible:[...datasetRows.rows].filter(row=>!row.hidden).map(row=>row.dataset.session)})'),
+    { options: 3, visible: ["session_2026-09-03"] },
+  );
+  await evaluate('renderEpisodes([testEpisodes[0]])');
   assert.equal(await evaluate('document.querySelector("#view-datasets thead").textContent.includes("状态")'), false);
 
   assert.deepEqual(
     await evaluate('document.querySelector(".episode-select").click();({selected:exportCount.textContent,enabled:!exportMcap.disabled,detail:episodeDialog.open})'),
     { selected: "1", enabled: true, detail: false },
+  );
+  assert.deepEqual(
+    await evaluate('(async()=>{const events=[];let index=0;const directory={getFileHandle:async name=>({createWritable:async()=>new WritableStream({close(){events.push(`done:${name}`)}})})};await exportEpisodeMcaps(["episode_120000_deadbeef","episode_120001_cafebabe"],directory,async url=>{events.push(url.searchParams.get("episode"));return new Response("mcap",{headers:{"Content-Disposition":`attachment; filename="episode_${String(index++).padStart(6,"0")}.mcap"`}})});return events})()'),
+    ["episode_120000_deadbeef", "done:episode_000000.mcap", "episode_120001_cafebabe", "done:episode_000001.mcap"],
   );
   assert.equal(await evaluate('document.querySelector("#exportMcap").click();document.querySelector("#toast span").textContent'), "导出 MCAP 需要启动 UI 后端");
   assert.deepEqual(

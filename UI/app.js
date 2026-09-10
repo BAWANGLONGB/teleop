@@ -363,10 +363,14 @@ const episodeStates = {
 
 function renderEpisodes(episodes) {
   episodeRecords = episodes;
+  const selectedSession = $("#sessionFilter").value;
+  const sessions = [...new Set(episodes.map((episode) => episode.session).filter(Boolean))].sort().reverse();
+  $("#sessionFilter").replaceChildren(new Option("全部 Session", ""), ...sessions.map((session) => new Option(session, session)));
+  $("#sessionFilter").value = sessions.includes(selectedSession) ? selectedSession : "";
   const empty = '<tr><td colspan="6">暂无采集数据</td></tr>';
   const rows = episodes.map((episode) => {
     const date = episode.created_at ? new Date(episode.created_at).toLocaleString("zh-CN", { hour12: false }).replaceAll("/", "-") : "—";
-    return `<tr data-episode="${escapeHTML(episode.id)}"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 ${escapeHTML(episode.id)}"><b>EP · ${escapeHTML(episode.id.slice(-8))}</b></label></td><td>${escapeHTML(episode.task)}</td><td>${escapeHTML(date)}</td><td>${episode.modalities.map((item) => `<span class="modality">${escapeHTML(item)}</span>`).join("")}</td><td>${formatDuration(episode.duration_seconds)}</td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>`;
+    return `<tr data-episode="${escapeHTML(episode.id)}" data-session="${escapeHTML(episode.session)}"><td><label class="episode-choice"><input type="checkbox" class="episode-select" aria-label="选择 ${escapeHTML(episode.id)}"><b>EP · ${escapeHTML(episode.id.slice(-8))}</b></label></td><td>${escapeHTML(episode.task)}</td><td>${escapeHTML(date)}</td><td>${episode.modalities.map((item) => `<span class="modality">${escapeHTML(item)}</span>`).join("")}</td><td>${formatDuration(episode.duration_seconds)}</td><td><button class="delete-button" aria-label="删除 Episode"><svg><use href="#i-trash"/></svg></button></td></tr>`;
   });
   $("#datasetRows").innerHTML = rows.join("") || empty;
   $("#recentEpisodeRows").innerHTML = episodes.slice(0, 3).map((episode) => {
@@ -378,7 +382,7 @@ function renderEpisodes(episodes) {
   $("#datasetCount").textContent = episodes.length;
   const bytes = episodes.reduce((total, item) => total + item.size_bytes, 0);
   $("#datasetSummary").textContent = `共 ${episodes.length} 段 · ${formatSize(bytes)}`;
-  syncExportSelection();
+  filterEpisodes();
 }
 
 function showEpisodeDetails(episode) {
@@ -396,7 +400,16 @@ function showEpisodeDetails(episode) {
 }
 
 function selectedEpisodeIds() {
-  return $$(".episode-select:checked", $("#datasetRows")).map((input) => input.closest("tr").dataset.episode);
+  return $$(".episode-select:checked", $("#datasetRows")).filter((input) => !input.closest("tr").hidden).map((input) => input.closest("tr").dataset.episode);
+}
+
+function filterEpisodes() {
+  const query = $("#episodeSearch").value.trim().toLowerCase();
+  const session = $("#sessionFilter").value;
+  $$("tr[data-episode]", $("#datasetRows")).forEach((row) => {
+    row.hidden = (session && row.dataset.session !== session) || !row.textContent.toLowerCase().includes(query);
+  });
+  syncExportSelection();
 }
 
 function syncExportSelection() {
@@ -409,19 +422,37 @@ function syncExportSelection() {
   all.indeterminate = visible.some((input) => input.checked) && !all.checked;
 }
 
-function downloadSelectedMcap() {
+async function exportEpisodeMcaps(episodeIds, directory, request = fetch) {
+  for (const episodeId of episodeIds) {
+    showToast(`正在导出 ${episodeId}`);
+    const url = new URL("/api/exports/mcap", location.href);
+    url.searchParams.set("episode", episodeId);
+    const response = await request(url);
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `${episodeId} 导出失败 (${response.status})`);
+    }
+    const filename = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || `${episodeId}.mcap`;
+    const file = await directory.getFileHandle(filename, { create: true });
+    await response.body.pipeTo(await file.createWritable());
+  }
+}
+
+async function downloadSelectedMcap() {
   const episodeIds = selectedEpisodeIds();
   if (!episodeIds.length) return;
   if (!useApi) return showToast("导出 MCAP 需要启动 UI 后端");
-  const url = new URL("/api/exports/mcap", location.href);
-  episodeIds.forEach((episodeId) => url.searchParams.append("episode", episodeId));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "";
-  document.body.append(link);
-  link.click();
-  link.remove();
-  showToast(`正在导出 ${episodeIds.length} 段 Episode`);
+  if (!window.showDirectoryPicker) return showToast("批量导出需要使用 Chrome 或 Edge");
+  try {
+    const directory = await window.showDirectoryPicker({ id: "mcap-export", mode: "readwrite" });
+    $("#exportMcap").disabled = true;
+    await exportEpisodeMcaps(episodeIds, directory);
+    showToast(`${episodeIds.length} 段 Episode 已依次导出`);
+  } catch (error) {
+    if (error.name !== "AbortError") showToast(error.message);
+  } finally {
+    syncExportSelection();
+  }
 }
 
 async function loadEpisodes() {
@@ -593,11 +624,8 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape" && recordingActive() && !$('dialog[open]')) stopRecording();
 });
-$("#episodeSearch").addEventListener("input", (event) => {
-  const query = event.target.value.trim().toLowerCase();
-  $$("tr", $("#datasetRows")).forEach((row) => row.hidden = !row.textContent.toLowerCase().includes(query));
-  syncExportSelection();
-});
+$("#episodeSearch").addEventListener("input", filterEpisodes);
+$("#sessionFilter").addEventListener("change", filterEpisodes);
 $("#selectAllEpisodes").addEventListener("change", (event) => {
   $$(".episode-select", $("#datasetRows")).filter((input) => !input.closest("tr").hidden).forEach((input) => input.checked = event.target.checked);
   syncExportSelection();

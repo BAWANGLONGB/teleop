@@ -20,16 +20,17 @@
                        ▼
           State MCAP + Vision L/R MCAP
                        │
-       时间对齐 → 合包 → 校验 → review.mp4
+       时间对齐 → 校验 → Parquet/MP4 → MCAP Attachments
                        │
                        ▼
-dataset/session_YYYY-MM-DD/episode_HHMMSS_ID/
-  ├── data/*.mcap
-  ├── metadata.json
-  ├── manifest.json
-  ├── review.mp4
-  └── calibration/*
+dataset/session_YYYY-MM-DD/
+  └── data/chunk-000/episode_000000.mcap
+        ├── attachment: meta/meta.json
+        ├── attachment: data/data.parquet
+        └── attachments: videos/*.mp4
 ```
+
+`episode_HHMMSS_ID/` 只在录制和后处理期间存在。最终 MCAP 写入并完成 CRC 校验后才删除临时目录；失败时保留原始 bag。
 
 ## 模块边界
 
@@ -53,17 +54,17 @@ GET    /api/devices/hardware         Marvin、双侧夹爪与双目相机实时�
 POST   /api/devices/start            启动并监管 PICO、DAS 与 Marvin
 POST   /api/devices/stop             停止设备；活动录制存在时拒绝
 GET    /api/preview/{left|right}.jpg  采集中最近一帧原生 JPEG
-GET    /api/episodes?status=&q=      从 manifest.json 建立列表
-GET    /api/exports/mcap?episode=... 流式导出选中的标准化 MCAP
-GET    /api/episodes/{id}            metadata + manifest
+GET    /api/episodes?status=&q=      从 MCAP 内嵌 meta/meta.json 建立列表
+GET    /api/exports/mcap?episode=... 流式导出单个 Episode 的 MCAP 文件
+GET    /api/episodes/{id}            内嵌 metadata + validation
 POST   /api/episodes                 校验参数并启动采集
 POST   /api/episodes/active/stop     SIGINT，触发现有安全收尾
 POST   /api/robot/reset              仅在数采之外独立复位双臂至初始位
-POST   /api/episodes/{id}/open       通过系统文件管理器打开已校验目录
+POST   /api/episodes/{id}/open       通过系统文件管理器打开 MCAP 所在目录
 DELETE /api/episodes/{id}            原子移动至 dataset/.trash/
 ```
 
-单个 Episode 且只有一个 MCAP 时直接下载 `.mcap`；选择多个 Episode 或分片文件时流式下载 `.tar`，归档内按 Episode 分目录，不在服务端生成临时副本。
+每次 API 请求只流式返回一个 `episode_XXXXXX.mcap`。批量选择时，浏览器取得一次目录写入权限，逐段请求并写完后再导出下一段；服务端和浏览器均不生成整批临时副本。
 
 `POST /api/episodes` 接受 `run_collection.py` 已存在的参数：`task`、`operator`、`robot_model`、`max_duration`、`no_vision`、`nsp_lateral` 和标定文件引用。DAS SDK 使用 `camera_resolutions` 和 `camera_fps`：帧率固定设置为 60 FPS，实际采集帧率约 30 FPS；当前 TeleOp 配置为 `1600x1296@60`。UI 保留两种已知分辨率，生产 API 再通过 `v4l2-ctl --list-formats-ext` 校验左右相机均支持 60 FPS。
 
@@ -79,7 +80,7 @@ Robotics Service 就绪以 TCP `63901` 和 `60061` 均处于监听状态为准�
 
 端口或设备节点异常会打印到 `server.py` 所在终端；同一错误只在首次出现或状态变化后再次出现时打印。API 请求失败同时写入浏览器开发者工具 Console。
 
-删除接口先校验 Episode ID 格式、解析后的路径仍在 `dataset/` 下、目标不是活动 Episode，再使用同文件系统原子重命名移入 `dataset/.trash/<episode>_<deleted_at>/`。接口不接受任意文件路径；永久清理由独立保留期任务完成。
+删除接口先校验 Episode ID 格式、解析后的路径仍在 `dataset/` 下、目标不是活动 Episode，再使用同文件系统原子重命名移入 `dataset/.trash/<episode>_<deleted_at>.mcap`。接口不接受任意文件路径；永久清理由独立保留期任务完成。
 
 ## 状态机
 
@@ -93,8 +94,8 @@ IDLE → STARTING_DEVICES → DEVICES_READY → RECORDING → FINALIZING → DEV
 
 ## 数据与安全原则
 
-- `episode` 目录是系统间的稳定契约；列表可先直接扫描 `manifest.json`，规模超过约十万段后再引入数据库索引。
-- 原始 MCAP 和标定快照不可变；复核结论写入独立标注文件，避免修改原始证据。
+- 最终 MCAP 是系统间的稳定契约；列表读取其首个 `meta/meta.json` attachment，规模达到数千段并出现延迟后再引入索引。
+- 最终 MCAP 不可变；原始校验结果和标定快照已经内嵌在 meta 中。
 - UI 的删除操作只移入 `.trash`；默认保留 7 天，避免误删导致不可恢复的数据损失。
 - 设备 SDK 仍由独立进程持有，相机编码和 UI 推流不得进入机械臂控制进程。
 - UI 停止按钮不是急停；异常运动始终使用物理急停，现场安全检查独立于网页交互。

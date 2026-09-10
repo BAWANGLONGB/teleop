@@ -266,26 +266,25 @@ python scripts/data/record_episode.py \
 线程等待多传感器凑齐一帧。
 相机原生 MJPEG 不经过解码、重编码或 ROS2 DDS，独立进程直接写入 MCAP。
 
-默认输出为 `dataset/session_<date>/episode_<time>_<id>/`，在线阶段写入 `state/`、
-`vision_left/`、`vision_right/` 三个隔离 bag；结束后自动按统一时间轴合并为完整
-`data/` MCAP，并补充左右反馈/控制 TCP 6D pose。`calibration/` 保存标定快照，
-`metadata.json` 保存任务、代码版本和对齐统计，`manifest.json` 保存完整性检查与文件
-SHA-256。也可重新执行：
+在线阶段在临时 `dataset/session_<date>/episode_<time>_<id>/` 中写入 `state/`、
+`vision_left/`、`vision_right/` 三个隔离 bag。结束后自动对齐并生成 LeRobot v2.1
+帧表和视频，再封装为唯一的 `data/chunk-XXX/episode_XXXXXX.mcap`；内含：
 
-```bash
-python scripts/data/validate_episode.py \
-  dataset/session_<date>/episode_<time>_<id>
+```text
+meta/meta.json
+data/data.parquet
+videos/observation.images.{left,right}.mp4
 ```
 
-生成人工审阅视频：
+外层使用标准 MCAP Attachment 记录。写入和 CRC 校验成功后删除临时 Episode 目录；
+任何转换失败都会保留原始 bag。它是通用 MCAP 文件容器，不是用于 `ros2 bag play`
+的 ROS 消息包。解包供 LeRobot 读取：
 
 ```bash
-/usr/bin/python3 scripts/data/review_episode.py \
-  dataset/session_<date>/episode_<time>_<id>
+python scripts/data/extract_episode_mcap.py \
+  dataset/session_<date>/data/chunk-000/episode_000000.mcap \
+  /tmp/episode_000000
 ```
-
-输出的 `review.mp4` 包含左右画面、机械臂关节反馈/目标、TCP pose、夹爪反馈/目标及
-各状态与图像的时间差。
 
 JSONL 继续作为控制调试日志，不作为训练数据的主格式。
 

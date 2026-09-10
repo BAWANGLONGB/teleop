@@ -1,3 +1,4 @@
+import json
 import runpy
 import struct
 import tempfile
@@ -16,6 +17,14 @@ from xr_marvin_teleop.common.episode_postprocessor import (
     _rpy_matrix,
     _topic_aligned_time_ns,
 )
+from xr_marvin_teleop.common.episode_package import (
+    _lerobot_mcap_path,
+    attachment_entries,
+    extract_episode_mcap,
+    read_attachment,
+    validate_episode_mcap,
+    write_episode_mcap,
+)
 from xr_marvin_teleop.common import episode_validator
 from xr_marvin_teleop.hardware.interface.das_finger import (
     DASFingerConfiguration,
@@ -23,6 +32,50 @@ from xr_marvin_teleop.hardware.interface.das_finger import (
 
 
 class TestEpisodePostprocessor(unittest.TestCase):
+    def test_lerobot_layout_uses_one_mcap_per_episode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = Path(directory) / "session_2026-09-07"
+            episode = session / "episode_120000_deadbeef"
+            episode.mkdir(parents=True)
+            output, episode_index = _lerobot_mcap_path(episode, {})
+            self.assertEqual(
+                output, session / "data/chunk-000/episode_000000.mcap"
+            )
+            custom, custom_index = _lerobot_mcap_path(
+                episode, {}, Path(directory) / "export"
+            )
+            self.assertEqual(
+                (custom, custom_index),
+                (Path(directory) / "export/chunk-000/episode_000000.mcap", 0),
+            )
+            meta = Path(directory) / "meta.json"
+            parquet = Path(directory) / "data.parquet"
+            meta.write_text(json.dumps({
+                "dataset_format": "lerobot",
+                "episode_id": episode.name,
+                "episode_index": episode_index,
+                "video_paths": {},
+            }), encoding="utf-8")
+            parquet.write_bytes(b"PAR1testPAR1")
+            write_episode_mcap(output, (
+                ("meta/meta.json", "application/json", meta),
+                ("data/data.parquet", "application/vnd.apache.parquet", parquet),
+            ))
+            self.assertEqual(
+                [item["name"] for item in attachment_entries(output)],
+                ["meta/meta.json", "data/data.parquet"],
+            )
+            self.assertEqual(validate_episode_mcap(output)["episode_id"], episode.name)
+            self.assertEqual(read_attachment(output, "data/data.parquet"), b"PAR1testPAR1")
+            extracted = extract_episode_mcap(output, Path(directory) / "extracted")
+            self.assertEqual((extracted / "data/data.parquet").read_bytes(), b"PAR1testPAR1")
+            entry = attachment_entries(output)[1]
+            with output.open("r+b") as file:
+                file.seek(entry["data_offset"])
+                file.write(b"X")
+            with self.assertRaisesRegex(ValueError, "CRC mismatch"):
+                validate_episode_mcap(output)
+
     def test_diagnostics_use_bag_time_for_multi_publisher_order(self):
         first, source = _topic_aligned_time_ns(
             "/diagnostics", object(), 1_000, 500
@@ -129,6 +182,31 @@ class TestEpisodePostprocessor(unittest.TestCase):
         self.assertNotIn("jpegenc", description)
         self.assertTrue(namespace["is_jpeg"](b"\xff\xd8data\xff\xd9"))
         self.assertFalse(namespace["is_jpeg"](b"raw-bgr"))
+        with patch.object(namespace["subprocess"], "run") as run:
+            run.return_value = SimpleNamespace(
+                returncode=0,
+                stdout="exposure_auto 0x009a0901 (menu) : min=0 max=3 default=3 value=1\n",
+            )
+            settings = namespace["camera_settings"]("/dev/finger_camera_left")
+            self.assertIn("exposure_auto", settings)
+            run.assert_called_once_with(
+                (
+                    "v4l2-ctl",
+                    "--device",
+                    "/dev/finger_camera_left",
+                    "--all",
+                ),
+                text=True,
+                stdout=namespace["subprocess"].PIPE,
+                stderr=namespace["subprocess"].STDOUT,
+                timeout=5.0,
+                check=False,
+            )
+            run.side_effect = FileNotFoundError("v4l2-ctl")
+            self.assertIn(
+                "settings unavailable",
+                namespace["camera_settings"]("/dev/finger_camera_left"),
+            )
         with tempfile.TemporaryDirectory() as directory:
             preview = Path(directory) / "left.jpg"
             writer = namespace["NativeMjpegWriter"].__new__(

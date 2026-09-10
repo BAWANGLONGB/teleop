@@ -4,6 +4,7 @@
 import argparse
 import os
 import signal
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -47,6 +48,26 @@ def write_preview_file(path, payload):
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def camera_settings(device):
+    try:
+        result = subprocess.run(
+            ("v4l2-ctl", "--device", device, "--all"),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=5.0,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"V4L2 settings unavailable for {device}: {error}"
+    status = (
+        "V4L2 settings"
+        if result.returncode == 0
+        else f"V4L2 settings query failed (exit {result.returncode})"
+    )
+    return f"{status} for {device}:\n{result.stdout.strip() or '(no output)'}"
 
 
 class NativeMjpegWriter:
@@ -228,6 +249,7 @@ class NativeMjpegWriter:
                 self._write_sample(sample)
                 if not announced_ready:
                     announced_ready = True
+                    print(camera_settings(self.device), flush=True)
                     if self.ready_file is not None:
                         self.ready_file.write_text("ready\n", encoding="utf-8")
                     print(

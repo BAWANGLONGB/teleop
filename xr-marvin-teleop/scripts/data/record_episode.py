@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 
 from xr_marvin_teleop.common.episode_postprocessor import postprocess_episode
+from xr_marvin_teleop.common.episode_package import package_episode
 from xr_marvin_teleop.common.episode_validator import validate_episode
 from xr_marvin_teleop.hardware.interface.das_finger import (
     ARM_NAMES,
@@ -237,11 +238,13 @@ def _require_mcap():
             "sudo apt-get install ros-humble-rosbag2-storage-mcap"
         )
     try:
+        import cv2  # noqa: F401
+        import pyarrow  # noqa: F401
         import rosbag2_py  # noqa: F401
         from teleop_msgs.msg import CompressedImageFrame, TcpPose  # noqa: F401
     except (ImportError, OSError) as error:
         raise RuntimeError(
-            "post-processing requires ROS2 Python and the latest built teleop_msgs"
+            "post-processing requires ROS2, teleop_msgs, OpenCV, and pyarrow"
         ) from error
 
 
@@ -467,7 +470,8 @@ def main():
         print("Post-processing state and vision into one enriched MCAP...", flush=True)
         postprocess_episode(episode_directory)
         manifest = validate_episode(episode_directory)
-        print(f"Episode {manifest['status']}: {episode_directory}")
+        package_path = package_episode(episode_directory)
+        print(f"Episode {manifest['status']}: {package_path}")
         raise SystemExit(0 if manifest["status"] != "rejected" else 1)
     except Exception:
         metadata["status"] = "aborted"

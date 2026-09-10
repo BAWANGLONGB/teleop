@@ -9,7 +9,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import tarfile
 import tempfile
 import threading
 import time
@@ -24,6 +23,11 @@ from urllib.parse import parse_qs, urlsplit
 UI_ROOT = Path(__file__).resolve().parent
 WORKSPACE = UI_ROOT.parent
 PROJECT_ROOT = WORKSPACE / "xr-marvin-teleop"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from xr_marvin_teleop.common.episode_package import read_attachment, write_episode_mcap
+
 CONDA_SETUP = WORKSPACE / ".miniconda-xr" / "etc" / "profile.d" / "conda.sh"
 ROS_BASE_SETUP = Path("/opt/ros/humble/setup.bash")
 ROS_SETUP = PROJECT_ROOT / "ros2_ws" / "install" / "setup.bash"
@@ -102,11 +106,25 @@ def read_json(path):
         return json.load(file)
 
 
+def package_metadata(path):
+    return json.loads(read_attachment(path, "meta/meta.json"))
+
+
 def episode_path(dataset_root, episode_id):
     if not EPISODE_RE.fullmatch(episode_id):
         raise ApiError(HTTPStatus.BAD_REQUEST, "Episode ID 格式无效")
     root = dataset_root.resolve()
-    matches = [path for path in root.glob(f"session_*/{episode_id}") if path.is_dir()]
+    legacy = [path for path in root.glob(f"session_*/{episode_id}") if path.is_dir()]
+    # ponytail: metadata is the source of truth; add an index only if thousands of files make this slow.
+    packaged = []
+    for pattern in ("session_*/data/chunk-*/episode_*.mcap", "data/chunk-*/episode_*.mcap"):
+        for path in root.glob(pattern):
+            try:
+                if package_metadata(path).get("episode_id") == episode_id:
+                    packaged.append(path)
+            except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                continue
+    matches = packaged or legacy
     if len(matches) != 1:
         raise ApiError(HTTPStatus.NOT_FOUND, "Episode 不存在")
     path = matches[0]
@@ -121,28 +139,32 @@ def move_episode_to_trash(dataset_root, episode_id, collection_active=False):
     source = episode_path(dataset_root, episode_id)
     trash = dataset_root.resolve() / ".trash"
     trash.mkdir(exist_ok=True)
-    destination = trash / f"{episode_id}_{time.time_ns()}"
+    destination = trash / f"{episode_id}_{time.time_ns()}{source.suffix}"
     source.replace(destination)
     return destination
 
 
 def open_episode_directory(dataset_root, episode_id, opener=None, launch=None):
     path = episode_path(dataset_root, episode_id)
+    target = path.parent if path.is_file() else path
     opener = opener or shutil.which("xdg-open") or shutil.which("gio")
     if not opener:
         raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "未找到系统文件管理器")
-    command = (opener, "open", str(path)) if Path(opener).name == "gio" else (opener, str(path))
+    command = (opener, "open", str(target)) if Path(opener).name == "gio" else (opener, str(target))
     (launch or subprocess.Popen)(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     return path
 
 
 def mcap_export_files(dataset_root, episode_ids):
     episode_ids = list(dict.fromkeys(episode_ids))
-    if not episode_ids or len(episode_ids) > 100:
-        raise ApiError(HTTPStatus.BAD_REQUEST, "请选择 1 到 100 段 Episode")
+    if len(episode_ids) != 1:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "每次只能导出一段 Episode")
     files = []
     for episode_id in episode_ids:
         episode = episode_path(dataset_root, episode_id)
+        if episode.is_file():
+            files.append((episode_id, episode))
+            continue
         data = episode / "data"
         if data.is_symlink():
             raise ApiError(HTTPStatus.BAD_REQUEST, f"{episode_id} 数据路径无效")
@@ -157,6 +179,31 @@ def mcap_export_files(dataset_root, episode_ids):
 
 
 def episode_record(path):
+    if path.is_file():
+        metadata = package_metadata(path)
+        source = metadata.get("source_metadata", {})
+        started = int(source.get("started_at_ns", 0) or 0)
+        features = metadata.get("features", {})
+        modalities = [
+            label for label, present in (
+                ("关节", "observation.state" in features),
+                ("PICO", "observation.pico" in features),
+                ("触觉", any("tactile" in name for name in features)),
+                ("视觉", any(item.get("dtype") == "video" for item in features.values())),
+            ) if present
+        ]
+        return {
+            "id": metadata.get("episode_id", path.stem),
+            "session": metadata.get("session", path.parents[2].name),
+            "task": metadata.get("task", "—"),
+            "operator": metadata.get("operator", "—"),
+            "robot_model": metadata.get("robot_model", "—"),
+            "status": metadata.get("status", "unknown"),
+            "duration_seconds": int(metadata.get("duration_seconds", 0) or 0),
+            "size_bytes": path.stat().st_size,
+            "created_at": datetime.fromtimestamp(started / 1e9).astimezone().isoformat() if started else "",
+            "modalities": modalities,
+        }
     metadata_path = path / "metadata.json"
     manifest_path = path / "manifest.json"
     metadata = read_json(metadata_path) if metadata_path.is_file() else {}
@@ -182,6 +229,7 @@ def episode_record(path):
     ]
     return {
         "id": metadata.get("episode_id", path.name),
+        "session": path.parent.name,
         "task": metadata.get("task", "—"),
         "operator": metadata.get("operator", "—"),
         "robot_model": metadata.get("robot_model", "—"),
@@ -194,15 +242,24 @@ def episode_record(path):
 
 
 def list_episodes(dataset_root=DATASET_ROOT):
-    records = []
+    records = {}
     if dataset_root.is_dir():
         for path in dataset_root.glob("session_*/episode_*"):
             if path.is_dir() and EPISODE_RE.fullmatch(path.name):
                 try:
-                    records.append(episode_record(path))
+                    record = episode_record(path)
+                    records[record["id"]] = record
                 except (OSError, ValueError, json.JSONDecodeError):
                     continue
-    return sorted(records, key=lambda item: item["created_at"], reverse=True)
+        for pattern in ("session_*/data/chunk-*/episode_*.mcap", "data/chunk-*/episode_*.mcap"):
+            for path in dataset_root.glob(pattern):
+                if path.is_file() and not path.is_symlink():
+                    try:
+                        record = episode_record(path)
+                        records[record["id"]] = record
+                    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                        continue
+    return sorted(records.values(), key=lambda item: item["created_at"], reverse=True)
 
 
 def prepare_camera_config(source, destination, resolution, fps):
@@ -816,32 +873,18 @@ class Handler(SimpleHTTPRequestHandler):
 
     def send_mcap_export(self, episode_ids):
         files = mcap_export_files(DATASET_ROOT, episode_ids)
-        if len(files) == 1:
-            episode_id, path = files[0]
-            size = path.stat().st_size
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Disposition", f'attachment; filename="{episode_id}.mcap"')
-            self.send_header("Content-Length", str(size))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            try:
-                with path.open("rb") as source:
-                    shutil.copyfileobj(source, self.wfile, length=1024 * 1024)
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                self.close_connection = True
-            return
-        filename = f"fieldnote_mcap_{datetime.now():%Y%m%d_%H%M%S}.tar"
+        if len(files) != 1:
+            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "Episode 必须只有一个最终 MCAP")
+        _episode_id, path = files[0]
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "application/x-tar")
-        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+        self.send_header("Content-Length", str(path.stat().st_size))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "close")
         self.end_headers()
         try:
-            with tarfile.open(fileobj=self.wfile, mode="w|") as archive:
-                for episode_id, path in files:
-                    archive.add(path, arcname=f"{episode_id}/{path.name}", recursive=False)
+            with path.open("rb") as source:
+                shutil.copyfileobj(source, self.wfile, length=1024 * 1024)
         except (BrokenPipeError, ConnectionResetError, OSError):
             self.close_connection = True
 
@@ -993,8 +1036,32 @@ def self_test():
         blocked.mkdir()
         (blocked / "data").mkdir()
         (blocked / "data" / "data_0.mcap").write_bytes(b"mcap")
+        assert episode_record(blocked)["session"] == "session_2026-09-03"
         assert episode_record(blocked)["size_bytes"] == 4
         assert mcap_export_files(root, [blocked.name]) == [(blocked.name, blocked / "data" / "data_0.mcap")]
+        packaged_mcap = root / "session_2026-09-03" / "data/chunk-000/episode_000000.mcap"
+        packaged_mcap.parent.mkdir(parents=True)
+        packaged_meta = Path(temporary) / "meta.json"
+        packaged_data = Path(temporary) / "data.parquet"
+        packaged_meta.write_text(
+            '{"dataset_format":"lerobot","episode_id":"episode_120002_01234567",'
+            '"session":"session_2026-09-03","features":{"observation.state":{"dtype":"float32"}},'
+            '"video_paths":{},"source_metadata":{"started_at_ns":1000000000}}', encoding="utf-8"
+        )
+        packaged_data.write_bytes(b"PAR1")
+        write_episode_mcap(packaged_mcap, (
+            ("meta/meta.json", "application/json", packaged_meta),
+            ("data/data.parquet", "application/vnd.apache.parquet", packaged_data),
+        ))
+        assert mcap_export_files(root, ["episode_120002_01234567"]) == [
+            ("episode_120002_01234567", packaged_mcap)
+        ]
+        assert episode_record(packaged_mcap)["size_bytes"] == packaged_mcap.stat().st_size
+        try:
+            mcap_export_files(root, [episode.name, blocked.name])
+            raise AssertionError("multiple Episodes were accepted by one export")
+        except ApiError as error:
+            assert error.status == HTTPStatus.BAD_REQUEST
         launches = []
         opened = open_episode_directory(
             root, blocked.name, opener="/usr/bin/xdg-open",

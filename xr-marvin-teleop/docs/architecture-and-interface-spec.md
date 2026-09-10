@@ -292,8 +292,8 @@ T = return_duration，默认 3 s
 
 - `q_start` 是按 B 当周期的实际反馈，不是上一次命令；
 - 目标是 `MARVIN_INITIAL_POSE_Q_RAD`：
-  - SDK A/left：`[90,-90,-90,-20,90,0,0]°`
-  - SDK B/right：`[-90,-90,90,-20,-90,0,0]°`
+  - SDK A/left：`[122,-60,-87,-115,88,-10,15.313]°`
+  - SDK B/right：`[-122,-60,87,-115,-88,-10,-15.313]°`
 - B 持续按住不会重复启动；Grip 未松开时 B 被忽略；
 - 回位过程中重新按下某侧 Grip，会立即取消该臂回位并重新锚定；
 - 轨迹按时间完成后保持初始关节目标，不额外判断反馈收敛；
@@ -374,7 +374,9 @@ Marvin SDK 回调/轮询   → /raw/marvin/joint_state
                                       ↓
                          state/ + vision_left/ + vision_right/
                                       ↓
-                   receive_steady_ns 对齐、TCP FK、完整性校验 → data/
+                   receive_steady_ns 对齐、TCP FK、完整性校验
+                                      ↓
+                   Parquet + MP4 + meta → MCAP Attachments
 ```
 
 每个消息流包含独立 `sequence_id`。`header.stamp` 记录采集机墙钟，
@@ -385,9 +387,10 @@ Marvin SDK 回调/轮询   → /raw/marvin/joint_state
 
 控制状态、命令、编码器、触觉和诊断写入 `state/`；左右相机分别在独立进程中把
 V4L2 原生 MJPEG 写入 `vision_left/`、`vision_right/`，不经过解码、重编码和 DDS。
-录制结束后合并为单一 `data/` MCAP，并由关节反馈/目标计算左右 TCP xyz+rpy。
-episode 的 `metadata.json` 在启动/结束时原子更新，退出后生成包含话题频率、时间戳
-回退、序号缺口和文件 SHA-256 的 `manifest.json`。JSONL 只保留为控制调试日志。
+录制结束后由关节反馈/目标计算左右 TCP xyz+rpy，以关节命令的 50 Hz 时间轴生成
+LeRobot v2.1 `data/data.parquet`，将双目 MJPEG 转为 MP4，并连同 `meta/meta.json`
+封装进单一 `data/chunk-XXX/episode_XXXXXX.mcap`。原始 metadata、校验结果、标定快照
+和 recorder 日志均内嵌在 meta；外层 MCAP 校验成功后删除临时 Episode 目录。
 
 ## 8. 明确不在当前边界内的能力
 
