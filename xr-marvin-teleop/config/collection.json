@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "paths": {
+    "output_root": "../dataset",
+    "das_config": "das_gripper.example.json",
+    "das_sdk_root": "../../gen_finger_con_python_sdk_release",
+    "scale_calibration": "../logs/marvin_scale_calibration.json",
+    "calibrations": [],
+    "urdf": "../assets/marvin/marvin_dual.urdf"
+  },
+  "robot": {
+    "model": "Marvin", "ip": "192.168.1.190",
+    "thumbstick_y_sign": 1, "scale_factor": null,
+    "nsp_lateral": false, "nsp_max_angle": 5.0, "nsp_angle_rate": 20.0,
+    "nsp_lateral_deadzone": 0.03, "nsp_lateral_range": 0.12,
+    "nsp_lateral_sign_left": 1, "nsp_lateral_sign_right": 1
+  },
+  "capture": {"vision_enabled": true, "pico_poll_hz": 120.0, "max_duration_s": null},
+  "recording": {
+    "state_cache_bytes": 268435456,
+    "state_storage": "data_collection/mcap_state.yaml",
+    "camera_storage": "data_collection/mcap_mjpeg.yaml",
+    "processed_storage": "data_collection/mcap_vision.yaml",
+    "qos": "data_collection/qos_overrides.yaml",
+    "state_topics": [
+      "/raw/pico/frame", "/raw/marvin/joint_state", "/command/marvin/joint_target",
+      "/command/das/target", "/raw/das/left/state", "/raw/das/right/state",
+      "/raw/das/left/tactile", "/raw/das/right/tactile", "/diagnostics",
+      "/episode/state", "/episode/event"
+    ]
+  },
+  "preview": {"enabled": true, "root": "/dev/shm/fieldnote-preview-zxcx", "fps": 30},
+  "runtime": {
+    "startup_timeout_s": 15.0, "camera_startup_timeout_s": 10.0,
+    "encoder_stale_timeout_s": 0.5,
+    "cpus": {
+      "hardware": [2, 3, 18, 19], "pico": [4, 20],
+      "das_left": [5, 21], "das_right": [6, 22],
+      "recorder": [7, 8, 9, 10, 11, 12, 13, 14, 15, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+    },
+    "nice": {"hardware": 0, "pico": 0, "das_left": 0, "das_right": 0, "recorder": 10},
+    "shutdown_timeout_s": {"hardware": 15.0, "das_left": 10.0, "das_right": 10.0, "recorder": 50.0, "pico": 10.0},
+    "recorder_stop_timeout_s": 10.0, "recorder_term_timeout_s": 3.0,
+    "export_nice": 10
+  },
+  "export": {
+    "mjpeg": true, "h264": true, "h264_crf": 23,
+    "h264_preset": "veryfast", "h264_keyint": 30, "h264_threads": 2
+  }
+}

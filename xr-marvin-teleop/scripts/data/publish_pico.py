@@ -6,6 +6,7 @@ import time
 from contextlib import closing
 
 from xr_marvin_teleop.common.xr_client import XrClient
+from xr_marvin_teleop.common.collection_hotkeys import CollectionHotkeys
 from xr_marvin_teleop.ros.telemetry_bridge import Ros2DataBridge
 
 
@@ -20,6 +21,7 @@ def main():
     period = 1.0 / arguments.poll_hz
     last_timestamp_ns = None
     invalid_published = False
+    hotkeys = CollectionHotkeys()
     try:
         with closing(XrClient()) as xr_client:
             xr_client.wait_for_fresh_snapshot()
@@ -30,11 +32,13 @@ def main():
                 except TimeoutError:
                     snapshot = None
                 if snapshot is None:
+                    hotkeys.update(None)
                     if not invalid_published:
                         publisher.publish_pico(None)
                         invalid_published = True
                 elif snapshot.timestamp_ns != last_timestamp_ns:
                     publisher.publish_pico(snapshot)
+                    hotkeys.update(snapshot)
                     last_timestamp_ns = snapshot.timestamp_ns
                     invalid_published = False
                 next_poll += period
@@ -46,6 +50,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        hotkeys.close()
         publisher.close()
 
 

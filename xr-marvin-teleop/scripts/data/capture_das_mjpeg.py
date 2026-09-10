@@ -4,7 +4,6 @@
 import argparse
 import os
 import signal
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -50,26 +49,6 @@ def write_preview_file(path, payload):
         temporary.unlink(missing_ok=True)
 
 
-def camera_settings(device):
-    try:
-        result = subprocess.run(
-            ("v4l2-ctl", "--device", device, "--all"),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=5.0,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return f"V4L2 settings unavailable for {device}: {error}"
-    status = (
-        "V4L2 settings"
-        if result.returncode == 0
-        else f"V4L2 settings query failed (exit {result.returncode})"
-    )
-    return f"{status} for {device}:\n{result.stdout.strip() or '(no output)'}"
-
-
 class NativeMjpegWriter:
     def __init__(
         self,
@@ -81,6 +60,7 @@ class NativeMjpegWriter:
         storage_config,
         ready_file=None,
         preview_file=None,
+        preview_fps=PREVIEW_FPS,
     ):
         try:
             import gi
@@ -111,6 +91,9 @@ class NativeMjpegWriter:
             None if preview_file is None else Path(preview_file).expanduser().resolve()
         )
         self._next_preview_ns = 0
+        self.preview_fps = int(preview_fps)
+        if not 1 <= self.preview_fps <= 240:
+            raise ValueError("preview FPS must be within [1, 240]")
         self._preview_disabled = False
         if self.output.exists():
             raise FileExistsError(f"camera bag already exists: {self.output}")
@@ -164,7 +147,7 @@ class NativeMjpegWriter:
             or steady_ns < self._next_preview_ns
         ):
             return
-        self._next_preview_ns = steady_ns + 1_000_000_000 // PREVIEW_FPS
+        self._next_preview_ns = steady_ns + 1_000_000_000 // self.preview_fps
         try:
             write_preview_file(self.preview_file, payload)
         except OSError as error:
@@ -249,7 +232,6 @@ class NativeMjpegWriter:
                 self._write_sample(sample)
                 if not announced_ready:
                     announced_ready = True
-                    print(camera_settings(self.device), flush=True)
                     if self.ready_file is not None:
                         self.ready_file.write_text("ready\n", encoding="utf-8")
                     print(
@@ -299,6 +281,7 @@ def main(arguments=None):
     parser.add_argument("--storage-config", required=True, type=Path)
     parser.add_argument("--ready-file", type=Path)
     parser.add_argument("--preview-file", type=Path)
+    parser.add_argument("--preview-fps", type=int, default=PREVIEW_FPS)
     parsed = parser.parse_args(arguments)
 
     writer = NativeMjpegWriter(
@@ -310,6 +293,7 @@ def main(arguments=None):
         parsed.storage_config,
         parsed.ready_file,
         parsed.preview_file,
+        parsed.preview_fps,
     )
     previous_handlers = {
         signal_number: signal.signal(signal_number, writer.request_stop)

@@ -1,0 +1,192 @@
+"""Run with sourced ROS2 and pip install -e '.[h264]'; no hardware required."""
+
+import argparse
+import hashlib
+from collections import Counter
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from xr_marvin_teleop.common.episode_video import (
+    activity_lock, add_video_arguments, export_episode, h264_nal_types, video_options,
+)
+from xr_marvin_teleop.common.collection_config import load_config, snapshot_config, read_json
+
+
+class TestEpisodeVideo(unittest.TestCase):
+    def test_switches_parameters_and_idle_lock(self):
+        parser = argparse.ArgumentParser()
+        add_video_arguments(parser, inherit=True)
+        options = video_options(parser.parse_args(["--no-mjpeg", "--h264-crf", "28"]),
+                                {"h264_keyint": 45})
+        self.assertEqual((options["mjpeg"], options["h264"], options["h264_crf"],
+                          options["h264_keyint"]), (False, True, 28, 45))
+        for invalid in ({"mjpeg": False, "h264": False}, {"h264_threads": 0},
+                        {"h264_crf": -1}, {"h264_keyint": 0}, {"h264_preset": "invalid"}):
+            with self.assertRaises(ValueError):
+                video_options(saved=invalid)
+        with tempfile.TemporaryDirectory() as directory:
+            with activity_lock(directory), activity_lock(directory):
+                with self.assertRaises(RuntimeError):
+                    activity_lock(directory, exclusive=True)
+            with activity_lock(directory, exclusive=True):
+                with self.assertRaises(RuntimeError):
+                    activity_lock(directory)
+
+    def test_real_ros_to_dual_mcap_and_h264_decode(self):
+        try:
+            import av
+            import numpy as np
+            import rosbag2_py
+            from mcap.reader import make_reader
+            from rclpy.serialization import serialize_message
+            from teleop_msgs.msg import CompressedImageFrame, JointCommand, MarvinState, PicoFrame
+            from foxglove_schemas_protobuf.CompressedImage_pb2 import CompressedImage
+            from foxglove_schemas_protobuf.CompressedVideo_pb2 import CompressedVideo
+        except ImportError as error:
+            self.skipTest(f"integration dependencies unavailable: {error}")
+        from xr_marvin_teleop.common.episode_postprocessor import postprocess_episode
+        from xr_marvin_teleop.common.episode_validator import validate_episode
+
+        with tempfile.TemporaryDirectory() as directory:
+            episode = Path(directory) / "episode_test"
+            episode.mkdir()
+            metadata = {"episode_id": episode.name, "status": "completed",
+                        "bags": ["state", "vision_left", "vision_right"],
+                        "camera_profiles": {"left": {"latency_correction_ns": 25000000}}}
+            config = load_config()
+            config["export"]["h264_crf"] = 27
+            snapshot = snapshot_config(config, episode / "config", require_devices=False)
+            metadata.update(config_snapshot="config/collection.json", capture_config=read_json(snapshot),
+                            video_outputs=config["export"], config_files=[
+                                {"snapshot": str(p.relative_to(episode)), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+                                for p in snapshot.parent.iterdir()])
+            (episode / "metadata.json").write_text(json.dumps(metadata))
+            jpeg_encoder = av.CodecContext.create("mjpeg", "w")
+            jpeg_encoder.width, jpeg_encoder.height = 64, 48
+            jpeg_encoder.pix_fmt = "yuvj420p"
+            from fractions import Fraction
+            jpeg_encoder.time_base = Fraction(1, 30)
+            jpeg = bytes(jpeg_encoder.encode(av.VideoFrame.from_ndarray(
+                np.full((48, 64, 3), 120, dtype=np.uint8), format="rgb24"))[0])
+            stamps = [1_700_000_000_123_456_789 + i * 33_333_337 for i in range(7)]
+            originals = {}
+            for bag in metadata["bags"]:
+                writer = rosbag2_py.SequentialWriter()
+                writer.open(rosbag2_py.StorageOptions(uri=str(episode / bag), storage_id="mcap"),
+                            rosbag2_py.ConverterOptions("", ""))
+                specs = (("/raw/marvin/joint_state", MarvinState),
+                         ("/command/marvin/joint_target", JointCommand),
+                         ("/raw/pico/frame", PicoFrame)) if bag == "state" else (
+                    (f"/raw/das/{bag.removeprefix('vision_')}/image/compressed", CompressedImageFrame),)
+                for topic, message_type in specs:
+                    writer.create_topic(rosbag2_py.TopicMetadata(
+                        name=topic, type=f"teleop_msgs/msg/{message_type.__name__}", serialization_format="cdr"))
+                for i, stamp in enumerate(stamps):
+                    for topic, message_type in specs:
+                        message = message_type()
+                        message.sequence_id = i + 1
+                        if message_type is CompressedImageFrame:
+                            message.image.data, message.image.format = jpeg, "jpeg"
+                            message.image.header.frame_id = bag
+                            header = message.image.header
+                        else:
+                            header = message.header
+                        header.stamp.sec, header.stamp.nanosec = divmod(stamp, 10**9)
+                        # Deliberately unrelated monotonic clock: it must not affect final time.
+                        if hasattr(message, "receive_steady_ns"):
+                            message.receive_steady_ns = 999 + i
+                        data = serialize_message(message)
+                        originals[topic, stamp] = data
+                        writer.write(topic, data, stamp + 1_000_000)
+                writer.close()
+            summary = postprocess_episode(episode)
+            self.assertEqual(summary["alignment"]["clock"], "CLOCK_REALTIME")
+            self.assertEqual(summary["alignment"]["topic_time_offsets_ns"], {})
+            self.assertEqual(validate_episode(episode)["status"], "validated")
+            options = video_options(saved={"h264_keyint": 3})
+            # A failed transcode cannot publish a partial pair or delete the originals.
+            with patch("xr_marvin_teleop.common.episode_video.H264Encoder.encode", side_effect=RuntimeError("disk/codec failure")):
+                with self.assertRaisesRegex(RuntimeError, "disk/codec failure"):
+                    export_episode(episode, options)
+            self.assertFalse((episode / "final").exists())
+            self.assertTrue((episode / "vision_left/metadata.yaml").exists())
+            outputs = export_episode(episode, options)
+            self.assertEqual(len(outputs), 2)
+            for output in outputs:
+                variant = output.suffixes[-2]
+                counts, keys = Counter(), {"left": [], "right": []}
+                decoders = {side: av.CodecContext.create("h264", "r") for side in keys}
+                with output.open("rb") as stream:
+                    reader = make_reader(stream, validate_crcs=True)
+                    for schema, channel, message in reader.iter_messages():
+                        topic = channel.topic
+                        self.assertIn(message.log_time, stamps)
+                        self.assertEqual(message.log_time, message.publish_time)
+                        index = counts[topic]
+                        counts[topic] += 1
+                        if schema.name.startswith("foxglove."):
+                            value = (CompressedImage if variant == ".mjpeg" else CompressedVideo).FromString(message.data)
+                            self.assertEqual(value.timestamp.ToNanoseconds(), stamps[index])
+                            if variant == ".mjpeg":
+                                self.assertEqual(value.data, jpeg)
+                                self.assertEqual(value.format, "jpeg")
+                            else:
+                                side = topic.split("/")[3]
+                                nals = h264_nal_types(value.data)
+                                if 5 in nals:
+                                    keys[side].append(index)
+                                    self.assertTrue({7, 8}.issubset(nals))
+                                    # Each IDR is independently decodable for seeking.
+                                    self.assertEqual(len(av.CodecContext.create("h264", "r").decode(av.Packet(value.data))), 1)
+                                frames = decoders[side].decode(av.Packet(value.data))
+                                self.assertEqual(len(frames), 1)
+                                self.assertNotEqual(frames[0].pict_type, av.video.frame.PictureType.B)
+                                self.assertEqual((frames[0].width, frames[0].height), (64, 48))
+                        elif (topic, message.log_time) in originals:
+                            self.assertEqual(message.data, originals[topic, message.log_time])
+                    self.assertEqual(len(counts), 9)  # 3 original + 4 FK + 2 cameras
+                    self.assertEqual(set(counts.values()), {7})
+                    attachments = {a.name: a.data for a in reader.iter_attachments()}
+                    self.assertEqual(len(attachments), 1 + len(metadata["config_files"]))
+                    self.assertEqual(attachments["config/collection.json"], snapshot.read_bytes())
+                    self.assertEqual(json.loads(attachments["meta/meta.json"])["capture_config"]["export"]["h264_crf"], 27)
+                if variant == ".h264":
+                    self.assertEqual(keys, {"left": [0, 3, 6], "right": [0, 3, 6]})
+            with self.assertRaises(FileExistsError):
+                export_episode(episode, options)
+            # Retain both checked exports while exercising each independently disabled branch.
+            (episode / "final").rename(episode / "checked_dual")
+            with patch("xr_marvin_teleop.common.episode_video.H264Encoder", side_effect=AssertionError("H264 disabled")):
+                self.assertEqual(len(export_episode(episode, video_options(saved={"h264": False}))), 1)
+            mjpeg = episode / "final/episode_test.mjpeg.mcap"
+            original_hash = hashlib.sha256(mjpeg.read_bytes()).hexdigest()
+            h264_only = video_options(saved={"mjpeg": False})
+            self.assertEqual(len(export_episode(episode, h264_only, add_missing=True)), 1)
+            self.assertTrue((episode / "final/episode_test.h264.mcap").is_file())
+            self.assertEqual(hashlib.sha256(mjpeg.read_bytes()).hexdigest(), original_hash)
+            with patch("xr_marvin_teleop.common.episode_video.H264Encoder", side_effect=AssertionError("cached export reencoded")):
+                self.assertEqual(len(export_episode(episode, h264_only, add_missing=True)), 1)
+            (episode / "final").rename(episode / "checked_mjpeg")
+            self.assertEqual(len(export_episode(episode, video_options(saved={"mjpeg": False}))), 1)
+            (episode / "final").rename(episode / "checked_h264")
+            completed = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/data/postprocess_episode.py"),
+                 str(episode), "--output-root", directory, "--no-h264", "--h264-crf", "28"],
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            saved = json.loads((episode / "metadata.json").read_text())
+            self.assertEqual(saved["export_status"], "completed")
+            self.assertEqual(saved["export_options"]["h264_crf"], 28)
+            self.assertEqual(saved["video_outputs"]["h264_crf"], 27)
+            self.assertEqual(saved["capture_config"]["export"]["h264_crf"], 27)
+            self.assertEqual(saved["final_outputs"], ["final/episode_test.mjpeg.mcap"])
+
+
+if __name__ == "__main__":
+    unittest.main()

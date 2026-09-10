@@ -28,18 +28,23 @@ try {
   const socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve) => socket.addEventListener("open", resolve, { once: true }));
   let sequence = 0;
-  const evaluate = (expression) => new Promise((resolve, reject) => {
+  const send = (method, params = {}) => new Promise((resolve, reject) => {
     const id = ++sequence;
     const receive = ({ data }) => {
       const message = JSON.parse(data);
       if (message.id !== id) return;
       socket.removeEventListener("message", receive);
-      if (message.result.exceptionDetails) reject(new Error(message.result.exceptionDetails.exception?.description || message.result.exceptionDetails.text));
-      else resolve(message.result.result.value);
+      if (message.error) reject(new Error(message.error.message));
+      else resolve(message.result);
     };
     socket.addEventListener("message", receive);
-    socket.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, awaitPromise: true, returnByValue: true } }));
+    socket.send(JSON.stringify({ id, method, params }));
   });
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+    return result.result.value;
+  };
 
   await evaluate('new Promise(r=>{const wait=setInterval(()=>{if(document.readyState==="complete"&&typeof askDelete==="function"){clearInterval(wait);r(true)}},20)})');
   assert.deepEqual(
@@ -53,15 +58,35 @@ try {
   );
   await evaluate('renderEpisodes([testEpisodes[0]])');
   assert.equal(await evaluate('document.querySelector("#view-datasets thead").textContent.includes("状态")'), false);
+  assert.deepEqual(await evaluate('({workbench:document.querySelectorAll("#view-workbench [data-review-result]").length,datasets:document.querySelectorAll("#view-datasets [data-review-result]").length})'), {workbench:3,datasets:0});
+  assert.equal(await evaluate('collectionSession.add(new Option("测试 Session","session_test"));collectionSession.value="session_test";collectionPayload().session'), "session_test");
+  await evaluate('collectionSession.value="";lastCollection={episode_id:testEpisodes[0].id,session:testEpisodes[0].session,active:true,episode_exists:true,review:{result:"unmarked"}};renderReviewEpisodes()');
+  assert.equal(await evaluate('[...document.querySelectorAll("[data-review-result]")].every(b=>b.disabled)'), true);
+  await evaluate('lastCollection.active=false;lastCollection.review={result:"success"};renderReviewControls()');
+  assert.equal(await evaluate('reviewResult.textContent'), "人工结果：成功");
+  assert.equal(await evaluate('document.querySelector("[data-review-result=success]").getAttribute("aria-pressed")'), "true");
+  await evaluate('lastCollection.review={result:"unmarked"};renderReviewControls()');
+  assert.equal(await evaluate('reviewResult.textContent'), "人工结果：成功（默认）");
+  assert.equal(await evaluate('datasetRows.textContent.includes("成功（默认）")'), true);
+  assert.equal(await evaluate('document.querySelector("#collectionForm").textContent.includes("X 开始/结束录制")'), false);
+  assert.equal(await evaluate('document.querySelector("#controllerStatus")'), null);
+  await evaluate('lastCollection.episode_exists=false;renderReviewEpisodes()');
+  assert.equal(await evaluate('reviewCandidates().get(`${testEpisodes[0].session}/${testEpisodes[0].id}`).can_review'), undefined);
+  await evaluate('document.querySelector("[data-review-result=failure]").click()');
+  assert.equal(await evaluate('document.querySelector("#toast span").textContent'), "结果标注需要启动 UI 后端");
+  await evaluate('lastCollection={};renderReviewEpisodes()');
 
   assert.deepEqual(
     await evaluate('document.querySelector(".episode-select").click();({selected:exportCount.textContent,enabled:!exportMcap.disabled,detail:episodeDialog.open})'),
     { selected: "1", enabled: true, detail: false },
   );
   assert.deepEqual(
-    await evaluate('(async()=>{const events=[];let index=0;const directory={getFileHandle:async name=>({createWritable:async()=>new WritableStream({close(){events.push(`done:${name}`)}})})};await exportEpisodeMcaps(["episode_120000_deadbeef","episode_120001_cafebabe"],directory,async url=>{events.push(url.searchParams.get("episode"));return new Response("mcap",{headers:{"Content-Disposition":`attachment; filename="episode_${String(index++).padStart(6,"0")}.mcap"`}})});return events})()'),
-    ["episode_120000_deadbeef", "done:episode_000000.mcap", "episode_120001_cafebabe", "done:episode_000001.mcap"],
+    await evaluate('(async()=>{const events=[];const directory={getFileHandle:async name=>({createWritable:async()=>new WritableStream({close(){events.push(`done:${name}`)}})})};await exportEpisodeMcaps(["episode_120000_deadbeef","episode_120001_cafebabe"],directory,async (url,options)=>{if(options?.method==="POST"){events.push(`pack:${JSON.parse(options.body).episode}`);return new Response("{}");}const id=url.searchParams.get("episode");events.push(id);return new Response("h264",{headers:{"Content-Disposition":`attachment; filename="${id}.h264.mcap"`}})});return events})()'),
+    ["pack:episode_120000_deadbeef", "episode_120000_deadbeef", "done:episode_120000_deadbeef.h264.mcap", "pack:episode_120001_cafebabe", "episode_120001_cafebabe", "done:episode_120001_cafebabe.h264.mcap"],
   );
+  assert.equal(await evaluate('(async()=>{try{await exportEpisodeMcaps(["episode_120000_deadbeef"],{getFileHandle(){throw new Error("must not write")}},async()=>new Response("mjpeg",{headers:{"Content-Disposition":"attachment; filename=\\"episode_120000_deadbeef.mjpeg.mcap\\""}}));return false}catch(e){return e.message.includes("后端未返回 H.264 MCAP")}})()'), true);
+  assert.deepEqual(await evaluate('[...exportFormat.options].map(o=>o.value)'), ["h264", "mjpeg"]);
+  assert.deepEqual(await evaluate('(async()=>{const files=[];await exportEpisodeMcaps(["episode_120000_deadbeef"],{getFileHandle:async name=>{files.push(name);return {createWritable:async()=>new WritableStream()}}},async (url,options)=>{if(options?.method==="POST"){files.push(JSON.parse(options.body).format);return new Response("{}")}return new Response("jpeg",{headers:{"Content-Disposition":`attachment; filename="episode_120000_deadbeef.mjpeg.mcap"`}})},"mjpeg");return files})()'), ["mjpeg", "episode_120000_deadbeef.mjpeg.mcap"]);
   assert.equal(await evaluate('document.querySelector("#exportMcap").click();document.querySelector("#toast span").textContent'), "导出 MCAP 需要启动 UI 后端");
   assert.deepEqual(
     await evaluate('document.querySelector("#datasetRows [data-episode]").click();openDirectoryFromDetail.click();new Promise(r=>setTimeout(()=>r({id:detailId.textContent,message:document.querySelector("#toast span").textContent}),20))'),
@@ -103,6 +128,37 @@ try {
   );
   assert.equal(await evaluate('requestRobotReset();document.querySelector("#toast span").textContent'), "机器人复位需要启动 UI 后端");
   await evaluate('recordButton.click();deviceButton.click()');
+  await evaluate('reviewEpisode.add(new Option("长 Session 名称测试".repeat(8) + " / episode_120000_deadbeef", "layout-test"));reviewEpisode.value="layout-test"');
+  for (const width of [1440, 390]) {
+    await send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
+    assert.deepEqual(await evaluate(`(() => {
+      const review = document.querySelector(".review-box");
+      const bounds = review.getBoundingClientRect();
+      const select = reviewEpisode.getBoundingClientRect();
+      return {
+        inMonitor: review.parentElement.classList.contains("monitor-panel"),
+        belowMonitor: review.previousElementSibling === monitorErrors && bounds.top >= monitorErrors.getBoundingClientRect().bottom,
+        outsideConfig: !review.closest(".launch-panel"),
+        fits: bounds.width > 0 && bounds.right <= innerWidth && select.left >= bounds.left && select.right <= bounds.right,
+      };
+    })()`), { inMonitor: true, belowMonitor: true, outsideConfig: true, fits: true }, `review layout at ${width}px`);
+  }
+  await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+  await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  assert.deepEqual(await evaluate('menuButton.click();({expanded:menuButton.getAttribute("aria-expanded"),hidden:getComputedStyle(sidebar).display==="none",inert:sidebar.inert,margin:getComputedStyle(document.querySelector(".app")).marginLeft,label:menuButton.getAttribute("aria-label")})'),
+    { expanded: "false", hidden: true, inert: true, margin: "0px", label: "展开导航" });
+  await evaluate('openView("datasets")');
+  assert.equal(await evaluate('getComputedStyle(sidebar).display'), "none");
+  assert.deepEqual(await evaluate('menuButton.click();({expanded:menuButton.getAttribute("aria-expanded"),visible:getComputedStyle(sidebar).display!=="none",inert:sidebar.inert,margin:getComputedStyle(document.querySelector(".app")).marginLeft})'),
+    { expanded: "true", visible: true, inert: false, margin: "232px" });
+  await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 900, deviceScaleFactor: 1, mobile: false });
+  await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  assert.equal(await evaluate('menuButton.getAttribute("aria-expanded")'), "false");
+  assert.deepEqual(await evaluate('menuButton.click();({open:sidebar.classList.contains("open"),inert:sidebar.inert,expanded:menuButton.getAttribute("aria-expanded")})'),
+    { open: true, inert: false, expanded: "true" });
+  await evaluate('document.querySelector(".nav-item[data-nav=workbench]").click()');
+  assert.deepEqual(await evaluate('({open:sidebar.classList.contains("open"),inert:sidebar.inert,expanded:menuButton.getAttribute("aria-expanded")})'),
+    { open: false, inert: true, expanded: "false" });
   socket.close();
   console.log("UI interaction check passed");
 } finally {

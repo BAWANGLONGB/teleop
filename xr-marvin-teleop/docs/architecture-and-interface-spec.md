@@ -213,8 +213,8 @@ XrTargetMapper(scale_factor).map_arm(
 ) -> ndarray(4, 4) | None
 ```
 
-操作者位于 Marvin 身后时，坐标约定为 OpenXR
-`right/up/forward -> Marvin +X/+Z/+Y`。第一次 active 调用同时
+坐标约定为 OpenXR `right/up/forward (+X/+Y/-Z) -> Marvin +Y/+Z/-X`。
+平移使用 `R @ p`，旋转使用 `R @ rotation @ R.T`，固定坐标转换不依赖头显朝向。第一次 active 调用同时
 记录手柄位姿和机器人 TCP，并返回当前 TCP；后续平移使用
 `tcp_anchor + scale × controller_delta`，旋转使用相对手柄旋转。inactive 调用
 清除该臂锚点并返回 `None`。
@@ -224,12 +224,16 @@ XrTargetMapper(scale_factor).map_arm(
 控制器只依赖两个方法：
 
 ```python
-record_control_cycle(xr_snapshot, robot_feedback, q_command_rad, scale_factor)
+record_control_cycle(
+    xr_snapshot, robot_feedback, q_command_rad, scale_factor,
+    gripper_command_closedness=None, gripper_state=None,
+    sample_id=None, sample_monotonic_ns=None, wall_time_ns=None,
+)
 close() -> None
 ```
 
 记录器在后台线程写 JSONL；`close()` 必须等待队列结束，并把写线程错误传播给
-调用方。日志不参与控制决策。
+调用方。未传入的采样编号和时间戳由记录器生成；ROS 各流独立编号。日志不参与控制决策。
 
 ## 5. 控制生命周期
 
@@ -237,7 +241,7 @@ close() -> None
 
 `prepare_hardware()` 的顺序固定：
 
-1. 等待 XR 递增帧，要求两侧 Grip/Trigger 松开；启用夹爪时还要求摇杆居中；
+1. 等待 XR 递增帧，要求两侧 Grip 松开；启用夹爪时还要求 Trigger 松开、摇杆居中；
 2. 连接 adapter，按配置检查 SDK 版本；
 3. 等待双臂递增反馈，确认无错误且双臂低速；
 4. 配置 K/D、Tool、速度和加速度百分比；
@@ -272,12 +276,12 @@ close() -> None
 退出都保持最后目标，不自动开爪。
 
 可选 IK_NSP 在每臂启动反馈姿态上缓存参考臂角平面，按配置的角度斜率渐变目标
-臂角。启用 `--nsp-lateral` 时，Grip 按下瞬间记录该臂手柄的 Marvin `+Y` 横向
+臂角。启用 `--nsp-lateral` 时，Grip 按下瞬间记录该臂手柄的 Marvin X
 位置作为零点，死区外的位移线性映射到 `ZSP_Angle`，默认最大偏角为 `5°`；松开
 Grip 后目标回到零并清除零点。普通 IK 建立目标和内部 NSP 状态后才调用 IK_NSP；
 失败、越限或单步关节变化过大时回退普通 IK。NSP 只偏置冗余臂角，不保证只移动
-J3，J4 安全限位仍由运动学边界统一执行。默认左右横向符号均为 `+1`，因此 Marvin
-`+Y`（手柄向右）使右臂沉肘、左臂抬肘；现场若符号相反再设置对应的 `-1` 校准项。
+J3，J4 安全限位仍由运动学边界统一执行。参数保留 `lateral` 名称，但当前控制轴对应
+OpenXR Z（手柄前后），不是 OpenXR X（左右）；默认左右符号均为 `+1`，可通过 `-1` 校准项反转。
 旧的固定
 `--nsp-angle-left/right` 参数保留作兼容，但不能与横向模式同时指定非零角度。
 
@@ -295,6 +299,7 @@ T = return_duration，默认 3 s
   - SDK A/left：`[122,-60,-87,-115,88,-10,15.313]°`
   - SDK B/right：`[-122,-60,87,-115,-88,-10,-15.313]°`
 - B 持续按住不会重复启动；Grip 未松开时 B 被忽略；
+- 启用夹爪时，同时把两侧目标闭合度设为 `1` 并立即发送；
 - 回位过程中重新按下某侧 Grip，会立即取消该臂回位并重新锚定；
 - 轨迹按时间完成后保持初始关节目标，不额外判断反馈收敛；
 - B 不修改当前 `scale_factor`、标定文件或 A/A 标定器状态；若已完成第一次 A
@@ -308,6 +313,10 @@ A 采用上升沿触发，仅在双 Grip 松开、没有 B 回位且双臂 `low_
 
 scale 来源优先级为：命令行显式值 > 有效标定文件 > 默认 `1.2`。scale 只缩放
 平移增量，不缩放旋转。
+
+当前标定接受方向仍固定为 Marvin `[0, 0.558866, 0.664989]`，即 `+Y/+Z`；
+它不会随 XR 映射或 B 回位姿态自动更新。当前 OpenXR 前方映射到 Marvin `-X`，
+因此现场动作不能只按“前伸”名称推断；改动坐标或参考姿态后须重新核验标定方向。
 
 ## 6. 故障与关闭语义
 
@@ -323,7 +332,7 @@ scale 来源优先级为：命令行显式值 > 有效标定文件 > 默认 `1.2
 | 实机网络连接失败 | 抛 `ConnectionError` |
 
 `run()` 无论正常结束、异常或 `KeyboardInterrupt` 都调用 `shutdown_hardware()`：
-先请求双臂 idle 并等待最多 `2 s`，随后在 `finally` 中依次释放 adapter、XR 和
+先请求双臂 idle 并等待最多 `2 s`，随后在 `finally` 中依次释放 adapter、ROS bridge、XR 和
 日志资源。
 程序关闭不是物理急停，不能替代 `robot.ini` 的急停监控和现场急停按钮。
 
@@ -374,23 +383,31 @@ Marvin SDK 回调/轮询   → /raw/marvin/joint_state
                                       ↓
                          state/ + vision_left/ + vision_right/
                                       ↓
-                   receive_steady_ns 对齐、TCP FK、完整性校验
+                   保留采集系统时间、TCP FK、完整性校验（离线）
                                       ↓
-                   Parquet + MP4 + meta → MCAP Attachments
+                   final/*.mjpeg.mcap + final/*.h264.mcap
 ```
 
 每个消息流包含独立 `sequence_id`。`header.stamp` 记录采集机墙钟，
 `receive_steady_ns` 记录接收点单调时钟；只有设备提供原始时钟时才填写
-`source_timestamp_ns`，否则为 `0`。后处理从状态消息估计单调时钟到墙钟的偏移，并以
-各消息的 `receive_steady_ns` 生成统一 MCAP 时间轴；序号用于检测丢帧，在线控制线程
-不等待同步。
+`source_timestamp_ns`，否则为 `0`。后处理使用 `header.stamp`（相机为 `image.header.stamp`）；
+无 header 的 Episode 消息使用 `wall_time_ns`，其余消息回退到原始 bag 时间。
+多发布者 `/diagnostics` 固定使用 bag 时间。当前不估计单调时钟偏移、不扣除相机延迟；
+系统时间回退保留并交给校验报告，序号用于检测丢帧，在线控制线程不等待同步。
 
 控制状态、命令、编码器、触觉和诊断写入 `state/`；左右相机分别在独立进程中把
 V4L2 原生 MJPEG 写入 `vision_left/`、`vision_right/`，不经过解码、重编码和 DDS。
-录制结束后由关节反馈/目标计算左右 TCP xyz+rpy，以关节命令的 50 Hz 时间轴生成
-LeRobot v2.1 `data/data.parquet`，将双目 MJPEG 转为 MP4，并连同 `meta/meta.json`
-封装进单一 `data/chunk-XXX/episode_XXXXXX.mcap`。原始 metadata、校验结果、标定快照
-和 recorder 日志均内嵌在 meta；外层 MCAP 校验成功后删除临时 Episode 目录。
+录制结束只关闭原始文件并标记 `export_status=pending`。设备停止后，
+`scripts/data/postprocess_episode.py` 合并数据到 `data/`，由关节反馈/目标计算左右 TCP xyz+rpy，
+校验通过后离线生成所选最终格式。每个文件包含完整状态、命令、触觉、TCP 和双路图像；
+状态沿用 ROS2 CDR，图像分别使用 Foxglove CompressedImage / CompressedVideo Protobuf。
+`meta/meta.json`、标定和采集配置快照作为附件内嵌。完成 CRC 和消息数量检查后，整组文件
+原子发布到 `final/`；已有输出不覆盖，原始 Episode 不自动删除。
+
+数采默认值在 `config/collection.json`，优先级为显式 CLI > 局部 JSON > 默认配置。
+启动前冻结引用文件，设备参数在同一设备会话内必须一致；离线导出读取录制快照。
+同一输出根目录下采集使用共享锁，导出使用独占锁，冲突时立即报错。
+旧 LeRobot 附件读写/解包仍供历史文件与 UI 使用，已无旧版自动打包入口。
 
 ## 8. 明确不在当前边界内的能力
 

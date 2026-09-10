@@ -1,9 +1,10 @@
 # Marvin 14-DoF simulation assets
 
 `marvin_dual.mujoco.xml` is the physics/rendering model used by the Marvin
-simulation. `marvin_dual.urdf` is retained as a checksum-tracked geometry and
-joint-contract reference; hardware FK/IK/Jacobian and the simulated target IK
-now use the Marvin vendor kinematics SDK and do not load this URDF at runtime.
+simulation. `marvin_dual.urdf` is the geometry/joint reference and is read by
+offline episode processing to derive TCP poses. Hardware and simulated target
+FK/IK use the Marvin vendor kinematics SDK; the live control loop does not load
+the URDF.
 
 The common `world_to_base` transform applies a 180-degree yaw about world Z so
 the simulated robot faces the PICO operator. The same rigid transform is applied
@@ -60,16 +61,19 @@ baseline.
 ## Validate
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_marvin_mujoco_model.py
+python -m unittest discover -s tests -p 'test_marvin_hardware.py' -v
+python -m unittest discover -s tests -p 'test_episode_postprocessor.py' -v
 ```
 
-The checks cover the 14-DoF joint/actuator contract, finite limits, payload
-dynamics, Demo-derived 120 mm/437.2 mm spacing, the unchanged 87 mm flange TCP,
-exact gripper mesh checksums, vendor-FK alignment, and model loading in MuJoCo.
+Run from the project root. These checks cover joint commands, headless model
+loading, the XR-to-vendor-IK control loop, and offline URDF FK/RPY conversion.
+They do not replace reviewing model dimensions, payload calibration, or the
+mesh hashes when updating the imported snapshot.
 
 Validated in this workspace with MuJoCo 3.12.0 and the CCS-680 vendor kinematics
-SDK. The runtime MJCF adds two raw-target mocap bodies, two limited-command mocap
-bodies, and two flange payload bodies while preserving the 14-DoF contract:
+SDK. The imported MJCF includes four target-marker mocap bodies and two flange
+payload bodies while preserving the 14-DoF contract. The current adapter drives
+joint actuators; it does not update these inherited target markers:
 
 ```text
 nq=14, nv=14, nu=14, nbody=21, nsite=2, nmesh=20
@@ -82,6 +86,6 @@ Joint1_L Joint2_L Joint3_L Joint4_L Joint5_L Joint6_L Joint7_L
 Joint1_R Joint2_R Joint3_R Joint4_R Joint5_R Joint6_R Joint7_R
 ```
 
-This is the URDF/WBC order only. Do not assume that it matches MarvinSDK A/B
-index, direction, or encoder zero. Those mappings require a read-only hardware
-check followed by single-joint motion tests.
+The current adapter maps this order directly to `[A1..A7, B1..B7]`, with no sign
+or zero offset. Hardware joint mapping still requires confirmation for each
+physical installation.

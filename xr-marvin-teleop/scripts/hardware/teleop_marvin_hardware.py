@@ -31,7 +31,7 @@ from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     DEFAULT_NSP_LATERAL_MAX_ANGLE_DEG,
     MarvinHardwareTeleopController,
 )
-from xr_marvin_teleop.ros.telemetry_bridge import Ros2TelemetryBridge
+from xr_marvin_teleop.ros.telemetry_bridge import Ros2DataBridge
 from xr_marvin_teleop.ros.das_client import RosDasClient
 from xr_marvin_teleop.ros.pico_client import RosPicoClient
 
@@ -253,7 +253,7 @@ def main():
             else load_modbus_gripper_configurations(arguments.gripper_config)
         )
         telemetry_bridge = (
-            Ros2TelemetryBridge(
+            Ros2DataBridge(
                 publish_gripper_commands=not arguments.das_from_ros2
             )
             if arguments.ros2

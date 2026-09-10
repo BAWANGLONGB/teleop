@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract a self-contained episode MCAP into data/meta/videos."""
+"""Extract a legacy LeRobot attachment MCAP into data/meta/videos (not Foxglove)."""
 
 import argparse
 import sys

@@ -363,6 +363,16 @@ class TestMarvinHardware(unittest.TestCase):
             XrClient(xr_sdk=NonAtomicSdk())
 
     def test_scale_calibration_and_mapping(self):
+        # Lock down all three physical axes independently of the implementation matrix.
+        for pose, expected in (
+            (make_openxr_pose(x_meters=1), [0, 1, 0]),
+            (make_openxr_pose(y_meters=1), [0, 0, 1]),
+            (make_openxr_pose(z_meters=-1), [-1, 0, 0]),
+        ):
+            with self.subTest(expected=expected):
+                snapshot = XrSnapshot(1, pose, pose, (0.0, 0.0), False, False)
+                for position, _rotation in transform_controller_poses_to_marvin_frame(snapshot):
+                    np.testing.assert_allclose(position, expected)
         calibrator = ArmLengthScaleCalibrator()
         down = {"left": np.zeros(3), "right": np.zeros(3)}
         delta = np.array([0.0, 0.558866, 0.664989])
@@ -402,7 +412,7 @@ class TestMarvinHardware(unittest.TestCase):
         )
         np.testing.assert_allclose(
             transform_controller_poses_to_marvin_frame(rotated_snapshot)[0][1],
-            [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
+            [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]],
             atol=1e-12,
         )
         pose_mapper = XrTargetMapper(0.5)
@@ -429,7 +439,7 @@ class TestMarvinHardware(unittest.TestCase):
             0, controller_poses[0], current_tcp_transform, True
         )
         np.testing.assert_allclose(
-            target_tcp_transform[:3, 3], [0.05, 0.0, 0.0], atol=1e-12
+            target_tcp_transform[:3, 3], [0.0, 0.05, 0.0], atol=1e-12
         )
 
         pose_mapper.map_arm(
@@ -469,7 +479,7 @@ class TestMarvinHardware(unittest.TestCase):
             0, after_regrip_poses[0], new_tcp_transform, True
         )
         np.testing.assert_allclose(
-            after_regrip_target[:3, 3], [1.05, 2.0, 3.0], atol=1e-12
+            after_regrip_target[:3, 3], [1.0, 2.05, 3.0], atol=1e-12
         )
 
         right_tcp_transform = np.eye(4)
@@ -484,7 +494,7 @@ class TestMarvinHardware(unittest.TestCase):
             1, after_regrip_poses[1], right_tcp_transform, True
         )
         np.testing.assert_allclose(
-            right_target[:3, 3], [4.0, 5.1, 6.0], atol=1e-12
+            right_target[:3, 3], [3.9, 5.0, 6.0], atol=1e-12
         )
         np.testing.assert_allclose(
             pose_mapper.map_arm(
@@ -1106,6 +1116,15 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertIn("--ready-file", commands["recorder"])
         self.assertIn("--calibration", commands["recorder"])
         self.assertIn("--preview-root", commands["recorder"])
+        self.assertIn("--mjpeg", commands["recorder"])
+        self.assertIn("--h264", commands["recorder"])
+        custom = namespace["parse_command_line_arguments"](
+            [*command_line, "--no-mjpeg", "--h264-crf", "28", "--h264-threads", "1"]
+        )
+        custom_command = namespace["_build_commands"](custom)["recorder"]
+        self.assertIn("--no-mjpeg", custom_command)
+        self.assertEqual(custom_command[custom_command.index("--h264-crf") + 1], "28")
+        self.assertEqual(custom_command[custom_command.index("--h264-threads") + 1], "1")
         self.assertEqual(
             namespace["PROCESS_CPUS"]["hardware"], (2, 3, 18, 19)
         )
@@ -1129,7 +1148,7 @@ class TestMarvinHardware(unittest.TestCase):
                 ("hardware", 15.0),
                 ("das_left", 10.0),
                 ("das_right", 10.0),
-                ("recorder", None),
+                ("recorder", 50.0),
                 ("pico", 10.0),
             ],
         )
@@ -1148,22 +1167,30 @@ class TestMarvinHardware(unittest.TestCase):
         runtime = namespace["main"].__globals__
         runtime["_preflight"] = lambda _arguments: None
         runtime["_build_commands"] = lambda _arguments: {}
-        runtime["_validated_cpu_sets"] = lambda: {}
+        runtime["_validated_cpu_sets"] = lambda *_args: {}
+        from contextlib import nullcontext
+        runtime["freeze_arguments"] = lambda *_args, **_kwargs: None
+        runtime["active_devices"] = lambda *_args: nullcontext()
+        runtime["check_active_devices"] = lambda *_args: None
         runtime["_start_devices"] = lambda *_arguments: calls.append("devices")
         runtime["_start_recording"] = lambda *_arguments: calls.append("recording")
         runtime["_finish_starting_devices"] = lambda *_arguments: calls.append(
             "hardware"
         )
         runtime["_monitor"] = lambda *_arguments: ("signal", 0)
-        runtime["_shutdown_processes"] = lambda *_arguments: {}
-        for part, expected in (
-            ("all", ["devices", "recording", "hardware"]),
-            ("devices", ["devices", "hardware"]),
-            ("recording", ["recording"]),
-        ):
-            calls.clear()
-            self.assertEqual(namespace["main"](["--part", part, *command_line]), 0)
-            self.assertEqual(calls, expected)
+        runtime["_shutdown_processes"] = lambda *_arguments, **_kwargs: {}
+        # Exercise the real lock in an isolated root, never the operator's dataset.
+        with tempfile.TemporaryDirectory() as directory:
+            for part, expected in (
+                ("all", ["devices", "recording", "hardware"]),
+                ("devices", ["devices", "hardware"]),
+                ("recording", ["recording"]),
+            ):
+                calls.clear()
+                self.assertEqual(namespace["main"]([
+                    "--part", part, *command_line, "--output-root", directory,
+                ]), 0)
+                self.assertEqual(calls, expected)
 
     def test_optional_ik_nsp_is_initialized_and_angle_is_ramped(self):
         def snapshot(timestamp, grip_values):
@@ -1208,12 +1235,12 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertAlmostEqual(kinematics.nsp_angles_deg[4], 1.6)
         controller.shutdown_hardware()
 
-    def test_lateral_nsp_maps_grip_held_controller_motion_to_angle(self):
-        def snapshot(timestamp, left_x, right_x, grip_values):
+    def test_lateral_nsp_uses_marvin_x_from_openxr_z(self):
+        def snapshot(timestamp, left_z, right_z, grip_values):
             return XrSnapshot(
                 timestamp,
-                make_openxr_pose(x_meters=left_x),
-                make_openxr_pose(x_meters=right_x),
+                make_openxr_pose(z_meters=left_z),
+                make_openxr_pose(z_meters=right_z),
                 grip_values,
                 False,
                 False,
@@ -1376,7 +1403,7 @@ class TestMarvinHardware(unittest.TestCase):
             session_records[-1]["q_command_rad"], repeated_targets_rad[-1]
         )
 
-        expected_tcp_delta_m = np.array([0.02, 0.0, 0.0])
+        expected_tcp_delta_m = np.array([0.0, 0.02, 0.0])
         maximum_position_error_mm = 0.0
         maximum_rotation_error_deg = 0.0
         for arm_index in (0, 1):
@@ -1429,15 +1456,6 @@ class TestMarvinHardware(unittest.TestCase):
         )
         np.testing.assert_allclose(sent_targets_deg, repeated_targets_deg[-1])
         send_adapter.release()
-
-        print(
-            "Offline XR->IK test: "
-            f"position_error={maximum_position_error_mm:.6f} mm, "
-            f"rotation_error={maximum_rotation_error_deg:.6f} deg, "
-            f"joint_peak_to_peak={maximum_joint_peak_to_peak_deg:.9f} deg, "
-            f"targets_A_deg={np.round(sent_targets_deg[:7], 6).tolist()}, "
-            f"targets_B_deg={np.round(sent_targets_deg[7:], 6).tolist()}"
-        )
 
     def test_headless_mujoco_adapter_accepts_marvin_joint_targets(self):
         xml_path = (
@@ -1551,7 +1569,7 @@ class TestMarvinHardware(unittest.TestCase):
         )
         active_moved_snapshot = XrSnapshot(
             4,
-            make_openxr_pose(x_meters=0.1),
+            make_openxr_pose(z_meters=0.1),
             make_openxr_pose(),
             (1.0, 0.0),
             False,
@@ -1559,7 +1577,7 @@ class TestMarvinHardware(unittest.TestCase):
         )
         active_unreachable_snapshot = XrSnapshot(
             5,
-            make_openxr_pose(x_meters=0.2),
+            make_openxr_pose(z_meters=0.2),
             make_openxr_pose(),
             (1.0, 0.0),
             False,
@@ -1567,7 +1585,7 @@ class TestMarvinHardware(unittest.TestCase):
         )
         regrip_anchor_snapshot = XrSnapshot(
             6,
-            make_openxr_pose(x_meters=0.4),
+            make_openxr_pose(z_meters=0.4),
             make_openxr_pose(),
             (1.0, 0.0),
             False,
@@ -1575,7 +1593,7 @@ class TestMarvinHardware(unittest.TestCase):
         )
         regrip_moved_snapshot = XrSnapshot(
             7,
-            make_openxr_pose(x_meters=0.5),
+            make_openxr_pose(z_meters=0.5),
             make_openxr_pose(),
             (1.0, 0.0),
             False,
@@ -1593,11 +1611,11 @@ class TestMarvinHardware(unittest.TestCase):
             9,
             make_openxr_pose(
                 y_meters=0.664989,
-                z_meters=-0.558866,
+                x_meters=0.558866,
             ),
             make_openxr_pose(
                 y_meters=0.664989,
-                z_meters=-0.558866,
+                x_meters=0.558866,
             ),
             (0.0, 0.0),
             True,
@@ -1711,7 +1729,7 @@ class TestMarvinHardware(unittest.TestCase):
         )
         active_moved_snapshot = XrSnapshot(
             3,
-            make_openxr_pose(x_meters=0.1),
+            make_openxr_pose(z_meters=0.1),
             make_openxr_pose(),
             (1.0, 0.0),
             False,
@@ -1719,7 +1737,7 @@ class TestMarvinHardware(unittest.TestCase):
         )
         recovered_anchor_snapshot = XrSnapshot(
             4,
-            make_openxr_pose(x_meters=0.5),
+            make_openxr_pose(z_meters=0.5),
             make_openxr_pose(),
             (1.0, 0.0),
             False,
@@ -1727,7 +1745,7 @@ class TestMarvinHardware(unittest.TestCase):
         )
         recovered_moved_snapshot = XrSnapshot(
             5,
-            make_openxr_pose(x_meters=0.6),
+            make_openxr_pose(z_meters=0.6),
             make_openxr_pose(),
             (1.0, 0.0),
             False,

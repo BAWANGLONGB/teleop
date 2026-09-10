@@ -35,6 +35,8 @@ struct XrSnapshot
     std::array<double, 2> thumbstick_y_values;
     bool button_a;
     bool button_b;
+    bool button_x;
+    bool button_y;
 };
 
 std::mutex snapshot_mutex;
@@ -126,6 +128,10 @@ XrSnapshot parse_snapshot(const PXREADevStateJson& device_state)
         json_object_get_boolean(require_member(right_controller, "primaryButton"));
     snapshot.button_b =
         json_object_get_boolean(require_member(right_controller, "secondaryButton"));
+    snapshot.button_x =
+        json_object_get_boolean(require_member(left_controller, "primaryButton"));
+    snapshot.button_y =
+        json_object_get_boolean(require_member(left_controller, "secondaryButton"));
     if (snapshot.timestamp_ns <= 0)
     {
         throw std::runtime_error("XR timestamp is not positive");
@@ -142,6 +148,7 @@ void on_client_callback(void*, PXREAClientCallbackType type, int, void* user_dat
 
     try
     {
+        // Parse outside the lock; publish only a complete callback, never a partial frame.
         XrSnapshot snapshot =
             parse_snapshot(*static_cast<PXREADevStateJson*>(user_data));
         std::lock_guard<std::mutex> lock(snapshot_mutex);
@@ -200,6 +207,7 @@ py::object get_snapshot()
         return py::none();
     }
 
+    // Python allocation must not hold up the SDK callback's snapshot publication.
     py::dict result;
     result["timestamp_ns"] = snapshot->timestamp_ns;
     result["left_controller_pose"] = snapshot->left_controller_pose;
@@ -209,6 +217,8 @@ py::object get_snapshot()
     result["thumbstick_y_values"] = snapshot->thumbstick_y_values;
     result["button_a"] = snapshot->button_a;
     result["button_b"] = snapshot->button_b;
+    result["button_x"] = snapshot->button_x;
+    result["button_y"] = snapshot->button_y;
     return result;
 }
 

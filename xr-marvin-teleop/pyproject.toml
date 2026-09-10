@@ -8,7 +8,11 @@ version = "0.1.0"
 description = "Minimal PICO XR teleoperation for Marvin dual arms"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["mujoco", "numpy", "pyarrow>=14"]
+dependencies = ["mujoco", "numpy", "mcap>=1.2", "foxglove-schemas-protobuf>=0.3"]
+
+[project.optional-dependencies]
+h264 = ["av>=12"]
+lerobot = ["pyarrow>=14"]
 
 [tool.setuptools.packages.find]
 include = ["xr_marvin_teleop*"]

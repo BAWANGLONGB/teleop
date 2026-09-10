@@ -7,3 +7,11 @@ __pycache__/
 .vscode/
 *.mjb
 .coverage
+
+# Generated data and build outputs; logs/*.json calibration files remain visible.
+/logs/*.jsonl
+/dataset/
+/ros2_ws/build/
+/ros2_ws/install/
+/ros2_ws/log/
+/config/*.local.json

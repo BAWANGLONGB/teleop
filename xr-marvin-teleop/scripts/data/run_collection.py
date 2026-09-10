@@ -2,7 +2,7 @@
 """Run device control and episode recording together or independently."""
 
 import argparse
-import math
+import json
 import os
 import shlex
 import shutil
@@ -10,8 +10,9 @@ import signal
 import subprocess
 import sys
 import threading
+import tempfile
 import time
-from contextlib import closing
+from contextlib import closing, ExitStack
 from pathlib import Path
 
 from xr_marvin_teleop.hardware.interface.das_finger import (
@@ -19,16 +20,19 @@ from xr_marvin_teleop.hardware.interface.das_finger import (
 )
 from xr_marvin_teleop.ros.das_client import RosDasClient
 from xr_marvin_teleop.ros.pico_client import RosPicoClient
+from xr_marvin_teleop.common.episode_video import (
+    activity_lock, add_video_arguments, video_options,
+)
+from xr_marvin_teleop.common.marvin_scale_calibration import resolve_scale_factor
+from xr_marvin_teleop.common.episode_review import EPISODE_ID, session_path
+from xr_marvin_teleop.common.collection_config import (
+    DEFAULT_CONFIG, read_json, configure_parser, apply_config,
+    freeze_arguments, active_devices, check_active_devices,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PROCESS_CPUS = {
-    "hardware": (2, 3, 18, 19),
-    "pico": (4, 20),
-    "das_left": (5, 21),
-    "das_right": (6, 22),
-    "recorder": (*range(7, 16), *range(23, 32)),
-}
+PROCESS_CPUS = {name: tuple(cpus) for name, cpus in read_json(DEFAULT_CONFIG)["runtime"]["cpus"].items()}
 
 
 def parse_command_line_arguments(arguments=None):
@@ -43,42 +47,64 @@ def parse_command_line_arguments(arguments=None):
     )
     parser.add_argument("--ready-file", type=Path)
     parser.add_argument("--task", required=True)
+    parser.add_argument("--session")
+    parser.add_argument("--episode-id")
     parser.add_argument("--operator", default=os.environ.get("USER", "unknown"))
-    parser.add_argument("--robot-model", required=True)
+    parser.add_argument("--robot-model")
     parser.add_argument("--enable-hardware", action="store_true")
     parser.add_argument("--confirmed-estop", action="store_true")
     parser.add_argument("--confirmed-joint-mapping", action="store_true")
-    parser.add_argument("--das-config", required=True, type=Path)
-    parser.add_argument("--das-sdk-root", required=True, type=Path)
+    parser.add_argument("--das-config", type=Path)
+    parser.add_argument("--das-sdk-root", type=Path)
     parser.add_argument(
         "--scale-calibration-path",
         type=Path,
-        default=PROJECT_ROOT / "logs" / "marvin_scale_calibration.json",
     )
-    parser.add_argument("--calibration", action="append", default=[], type=Path)
-    parser.add_argument("--output-root", type=Path, default=PROJECT_ROOT / "dataset")
+    parser.add_argument("--calibration", action="append", type=Path)
+    parser.add_argument("--output-root", type=Path)
     parser.add_argument("--metadata", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("--notes", default="")
     parser.add_argument("--max-duration", type=float)
+    parser.add_argument("--unlimited-duration", dest="max_duration", action="store_const", const=None)
     parser.add_argument("--no-vision", action="store_true")
     parser.add_argument("--preview-root", type=Path)
-    parser.add_argument("--pico-poll-hz", type=float, default=120.0)
-    parser.add_argument("--startup-timeout", type=float, default=15.0)
-    parser.add_argument("--robot-ip", default="192.168.1.190")
-    parser.add_argument("--thumbstick-y-sign", type=int, choices=(-1, 1), default=1)
+    parser.add_argument("--pico-poll-hz", type=float)
+    parser.add_argument("--startup-timeout", type=float)
+    parser.add_argument("--camera-startup-timeout", type=float)
+    parser.add_argument("--robot-ip")
+    parser.add_argument("--thumbstick-y-sign", type=int, choices=(-1, 1))
     parser.add_argument("--scale-factor", type=float)
     parser.add_argument("--nsp-lateral", action="store_true")
-    parser.add_argument("--nsp-max-angle", type=float, default=5.0)
-    parser.add_argument("--nsp-angle-rate", type=float, default=20.0)
-    parser.add_argument("--nsp-lateral-deadzone", type=float, default=0.03)
-    parser.add_argument("--nsp-lateral-range", type=float, default=0.12)
+    parser.add_argument("--nsp-max-angle", type=float)
+    parser.add_argument("--nsp-angle-rate", type=float)
+    parser.add_argument("--nsp-lateral-deadzone", type=float)
+    parser.add_argument("--nsp-lateral-range", type=float)
     parser.add_argument(
-        "--nsp-lateral-sign-left", type=int, choices=(-1, 1), default=1
+        "--nsp-lateral-sign-left", type=int, choices=(-1, 1)
     )
     parser.add_argument(
-        "--nsp-lateral-sign-right", type=int, choices=(-1, 1), default=1
+        "--nsp-lateral-sign-right", type=int, choices=(-1, 1)
     )
+    add_video_arguments(parser)
+    parser.add_argument("--vision", dest="no_vision", action="store_false")
+    parser.add_argument("--no-nsp-lateral", dest="nsp_lateral", action="store_false")
+    parser.add_argument("--preview", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--preview-fps", type=int)
+    configure_parser(parser)
     parsed = parser.parse_args(arguments)
+    try:
+        apply_config(parsed)
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
+    if parsed.print_effective_config:
+        return parsed
+    try:
+        if parsed.session and not session_path(parsed.output_root, parsed.session).is_dir():
+            raise ValueError("指定的 Session 不存在")
+        if parsed.episode_id and not EPISODE_ID.fullmatch(parsed.episode_id):
+            raise ValueError("Episode ID 格式无效")
+    except ValueError as error:
+        parser.error(str(error))
     missing = [
         flag
         for flag, enabled in (
@@ -90,36 +116,13 @@ def parse_command_line_arguments(arguments=None):
     ]
     if missing:
         parser.error("required hardware confirmations: " + ", ".join(missing))
-    if not parsed.task.strip() or not parsed.robot_model.strip():
+    if not parsed.task or not parsed.task.strip() or not parsed.robot_model.strip():
         parser.error("--task and --robot-model must not be empty")
     if any(
         "=" not in item or not item.split("=", 1)[0].strip()
         for item in parsed.metadata
     ):
         parser.error("--metadata must use a non-empty KEY=VALUE")
-    if parsed.max_duration is not None and (
-        not math.isfinite(parsed.max_duration) or parsed.max_duration <= 0.0
-    ):
-        parser.error("--max-duration must be positive")
-    if not 30.0 <= parsed.pico_poll_hz <= 240.0:
-        parser.error("--pico-poll-hz must be within [30, 240]")
-    if not math.isfinite(parsed.startup_timeout) or parsed.startup_timeout <= 0.0:
-        parser.error("--startup-timeout must be positive")
-    if parsed.scale_factor is not None and (
-        not math.isfinite(parsed.scale_factor) or parsed.scale_factor <= 0.0
-    ):
-        parser.error("--scale-factor must be positive and finite")
-    if (
-        not math.isfinite(parsed.nsp_max_angle)
-        or not 0.0 < parsed.nsp_max_angle <= 30.0
-        or not math.isfinite(parsed.nsp_angle_rate)
-        or parsed.nsp_angle_rate <= 0.0
-        or not math.isfinite(parsed.nsp_lateral_deadzone)
-        or parsed.nsp_lateral_deadzone < 0.0
-        or not math.isfinite(parsed.nsp_lateral_range)
-        or parsed.nsp_lateral_range <= parsed.nsp_lateral_deadzone
-    ):
-        parser.error("invalid NSP angle, rate, deadzone, or range")
     return parsed
 
 
@@ -156,11 +159,7 @@ def _preflight(arguments):
         raise FileNotFoundError(
             f"DAS SDK scripts package not found: {arguments.das_sdk_root}"
         )
-    if not arguments.scale_calibration_path.is_file():
-        raise FileNotFoundError(
-            "scale calibration not found; complete A/A calibration first: "
-            f"{arguments.scale_calibration_path}"
-        )
+    resolve_scale_factor(arguments.scale_factor, arguments.scale_calibration_path)
     configurations = load_das_finger_configurations(arguments.das_config)
     missing_devices = [
         path
@@ -217,8 +216,19 @@ def _build_commands(arguments):
         "--ready-file",
         str(recorder_ready_file),
         "--camera-startup-timeout",
-        str(arguments.startup_timeout),
+        str(arguments.camera_startup_timeout),
     ]
+    if arguments.config is not None:
+        recorder.extend(("--config", str(arguments.config)))
+    for key in ("session", "episode_id"):
+        value = getattr(arguments, key, None)
+        if value:
+            recorder.extend(("--" + key.replace("_", "-"), value))
+    for key, value in video_options(arguments).items():
+        if key in ("mjpeg", "h264"):
+            recorder.append(f"--{key}" if value else f"--no-{key}")
+        else:
+            recorder.extend(("--" + key.replace("_", "-"), str(value)))
     for path in calibrations:
         recorder.extend(("--calibration", str(path)))
     for item in arguments.metadata:
@@ -290,6 +300,8 @@ def _build_commands(arguments):
             str(arguments.das_sdk_root),
             "--ready-timeout",
             str(arguments.startup_timeout),
+            "--encoder-stale-timeout",
+            str(arguments.effective_config["runtime"]["encoder_stale_timeout_s"]),
         ]
         for side in ("left", "right")
     }
@@ -330,11 +342,12 @@ def _start_process(name, command, cpus, nice=0):
     return process
 
 
-def _validated_cpu_sets():
+def _validated_cpu_sets(cpu_sets=None):
+    cpu_sets = PROCESS_CPUS if cpu_sets is None else cpu_sets
     available = set(os.sched_getaffinity(0))
     missing = {
         name: sorted(set(cpus) - available)
-        for name, cpus in PROCESS_CPUS.items()
+        for name, cpus in cpu_sets.items()
         if not set(cpus).issubset(available)
     }
     if missing:
@@ -343,7 +356,7 @@ def _validated_cpu_sets():
             for name, cpus in missing.items()
         )
         raise RuntimeError(f"planned CPU affinity is unavailable ({details})")
-    return PROCESS_CPUS
+    return cpu_sets
 
 
 def _wait_for_pico(process, timeout_seconds):
@@ -413,13 +426,15 @@ def _wait_for_recorder(process, ready_file, timeout_seconds):
 
 def _start_devices(arguments, commands, cpu_sets, processes):
     processes["pico"] = _start_process(
-        "PICO publisher", commands["pico"], cpu_sets["pico"]
+        "PICO publisher", commands["pico"], cpu_sets["pico"],
+        nice=arguments.effective_config["runtime"]["nice"]["pico"],
     )
     _wait_for_pico(processes["pico"], arguments.startup_timeout)
     for side in ("left", "right"):
         name = f"das_{side}"
         processes[name] = _start_process(
-            f"DAS {side} source", commands[name], cpu_sets[name]
+            f"DAS {side} source", commands[name], cpu_sets[name],
+            nice=arguments.effective_config["runtime"]["nice"][name],
         )
     _wait_for_das(
         {name: processes[name] for name in ("das_left", "das_right")},
@@ -435,7 +450,8 @@ def _finish_starting_devices(arguments, commands, cpu_sets, processes):
         if processes[name].poll() is not None:
             raise RuntimeError(f"{name} source stopped before hardware startup")
     processes["hardware"] = _start_process(
-        "Marvin hardware", commands["hardware"], cpu_sets["hardware"]
+        "Marvin hardware", commands["hardware"], cpu_sets["hardware"],
+        nice=arguments.effective_config["runtime"]["nice"]["hardware"],
     )
 
 
@@ -446,10 +462,10 @@ def _start_recording(arguments, commands, cpu_sets, processes):
         "episode recorder",
         commands["recorder"],
         cpu_sets["recorder"],
-        nice=10,
+        nice=arguments.effective_config["runtime"]["nice"]["recorder"],
     )
     _wait_for_recorder(
-        processes["recorder"], ready_file, arguments.startup_timeout + 2.0
+        processes["recorder"], ready_file, arguments.camera_startup_timeout + 2.0
     )
 
 
@@ -481,18 +497,14 @@ def _stop_process(process, name, timeout_seconds):
             return process.wait()
 
 
-def _shutdown_processes(processes, stop_process=_stop_process):
+def _shutdown_processes(processes, stop_process=_stop_process, timeouts=None):
+    timeouts = read_json(DEFAULT_CONFIG)["runtime"]["shutdown_timeout_s"] if timeouts is None else timeouts
     results = {}
-    for name, timeout_seconds in (
-        ("hardware", 15.0),
-        ("das_left", 10.0),
-        ("das_right", 10.0),
-        ("recorder", None),
-        ("pico", 10.0),
-    ):
+    # Stop motion first; keep recording alive until the hardware and DAS have exited.
+    for name in ("hardware", "das_left", "das_right", "recorder", "pico"):
         process = processes.get(name)
         if process is not None:
-            results[name] = stop_process(process, name, timeout_seconds)
+            results[name] = stop_process(process, name, timeouts[name])
     return results
 
 
@@ -518,11 +530,26 @@ def _monitor(processes, stop_requested):
 
 def main(arguments=None):
     parsed = parse_command_line_arguments(arguments)
+    if parsed.print_effective_config:
+        print(json.dumps(parsed.effective_config, ensure_ascii=False, indent=2))
+        return 0
+    resources = ExitStack()
     try:
+        parsed.output_root.mkdir(parents=True, exist_ok=True)
+        # Persistent devices may run during export; recording remains mutually exclusive.
+        if parsed.part != "devices":
+            resources.enter_context(activity_lock(parsed.output_root))
+        temporary = resources.enter_context(tempfile.TemporaryDirectory(prefix=".collection-config-", dir=parsed.output_root))
+        freeze_arguments(parsed, Path(temporary) / "config")
+        if parsed.part != "recording":
+            resources.enter_context(active_devices(parsed.effective_config))
+        else:
+            check_active_devices(parsed.effective_config)
         _preflight(parsed)
         commands = _build_commands(parsed)
-        cpu_sets = _validated_cpu_sets()
+        cpu_sets = _validated_cpu_sets(parsed.effective_config["runtime"]["cpus"])
     except Exception as error:
+        resources.close()
         print(f"Collection preflight failed: {error}", file=sys.stderr, flush=True)
         return 1
     processes = {}
@@ -559,7 +586,10 @@ def main(arguments=None):
         print(f"Collection supervisor error: {error}", file=sys.stderr, flush=True)
         exit_code = 1
     finally:
-        shutdown_results = _shutdown_processes(processes)
+        try:
+            shutdown_results = _shutdown_processes(processes, timeouts=parsed.effective_config["runtime"]["shutdown_timeout_s"])
+        finally:
+            resources.close()
         _recorder_ready_file(parsed).unlink(missing_ok=True)
         if parsed.ready_file is not None:
             parsed.ready_file.unlink(missing_ok=True)

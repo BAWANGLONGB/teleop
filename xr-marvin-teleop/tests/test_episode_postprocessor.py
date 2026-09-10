@@ -12,13 +12,11 @@ import numpy as np
 
 from xr_marvin_teleop.common.episode_postprocessor import (
     UrdfForwardKinematics,
-    _aligned_time_ns,
     _matrix_rpy,
     _rpy_matrix,
-    _topic_aligned_time_ns,
+    _topic_time_ns,
 )
 from xr_marvin_teleop.common.episode_package import (
-    _lerobot_mcap_path,
     attachment_entries,
     extract_episode_mcap,
     read_attachment,
@@ -32,28 +30,18 @@ from xr_marvin_teleop.hardware.interface.das_finger import (
 
 
 class TestEpisodePostprocessor(unittest.TestCase):
-    def test_lerobot_layout_uses_one_mcap_per_episode(self):
+    def test_legacy_attachments_round_trip_and_detect_corruption(self):
         with tempfile.TemporaryDirectory() as directory:
             session = Path(directory) / "session_2026-09-07"
             episode = session / "episode_120000_deadbeef"
             episode.mkdir(parents=True)
-            output, episode_index = _lerobot_mcap_path(episode, {})
-            self.assertEqual(
-                output, session / "data/chunk-000/episode_000000.mcap"
-            )
-            custom, custom_index = _lerobot_mcap_path(
-                episode, {}, Path(directory) / "export"
-            )
-            self.assertEqual(
-                (custom, custom_index),
-                (Path(directory) / "export/chunk-000/episode_000000.mcap", 0),
-            )
+            output = session / "data/chunk-000/episode_000000.mcap"
             meta = Path(directory) / "meta.json"
             parquet = Path(directory) / "data.parquet"
             meta.write_text(json.dumps({
                 "dataset_format": "lerobot",
                 "episode_id": episode.name,
-                "episode_index": episode_index,
+                "episode_index": 0,
                 "video_paths": {},
             }), encoding="utf-8")
             parquet.write_bytes(b"PAR1testPAR1")
@@ -77,20 +65,37 @@ class TestEpisodePostprocessor(unittest.TestCase):
                 validate_episode_mcap(output)
 
     def test_diagnostics_use_bag_time_for_multi_publisher_order(self):
-        first, source = _topic_aligned_time_ns(
-            "/diagnostics", object(), 1_000, 500
+        first, source = _topic_time_ns(
+            "/diagnostics", object(), 1_000
         )
-        second, _source = _topic_aligned_time_ns(
-            "/diagnostics", object(), 1_001, 500
+        second, _source = _topic_time_ns(
+            "/diagnostics", object(), 1_001
         )
         self.assertEqual((first, second, source), (1_000, 1_001, "bag_time_ns"))
 
-    def test_camera_alignment_applies_latency_correction(self):
-        message = SimpleNamespace(receive_steady_ns=1_000, issue_steady_ns=0)
-        timestamp, source = _topic_aligned_time_ns(
-            "/raw/das/left/image/compressed", message, 9_999, 500, 25
+    def test_camera_alignment_uses_system_time_without_latency_correction(self):
+        message = SimpleNamespace(
+            receive_steady_ns=1_000,
+            image=SimpleNamespace(
+                header=SimpleNamespace(stamp=SimpleNamespace(sec=10, nanosec=123))
+            ),
         )
-        self.assertEqual((timestamp, source), (1_475, "receive_steady_ns"))
+        timestamp, source = _topic_time_ns(
+            "/raw/das/left/image/compressed", message, 9_999
+        )
+        self.assertEqual((timestamp, source), (10_000_000_123, "header.stamp"))
+
+    def test_episode_time_uses_payload_or_falls_back_to_bag(self):
+        for payload, expected in (
+            ('{"wall_time_ns": 123}', (123, "payload.wall_time_ns")),
+            ('{"wall_time_ns": 0}', (999, "bag_time_ns")),
+            ("invalid JSON", (999, "bag_time_ns")),
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(
+                    _topic_time_ns("/episode/event", SimpleNamespace(data=payload), 999),
+                    expected,
+                )
 
     def test_camera_resolution_latency_defaults(self):
         low = DASFingerConfiguration("/dev/l", "/dev/cl", 0.0, 0.15)
@@ -182,37 +187,13 @@ class TestEpisodePostprocessor(unittest.TestCase):
         self.assertNotIn("jpegenc", description)
         self.assertTrue(namespace["is_jpeg"](b"\xff\xd8data\xff\xd9"))
         self.assertFalse(namespace["is_jpeg"](b"raw-bgr"))
-        with patch.object(namespace["subprocess"], "run") as run:
-            run.return_value = SimpleNamespace(
-                returncode=0,
-                stdout="exposure_auto 0x009a0901 (menu) : min=0 max=3 default=3 value=1\n",
-            )
-            settings = namespace["camera_settings"]("/dev/finger_camera_left")
-            self.assertIn("exposure_auto", settings)
-            run.assert_called_once_with(
-                (
-                    "v4l2-ctl",
-                    "--device",
-                    "/dev/finger_camera_left",
-                    "--all",
-                ),
-                text=True,
-                stdout=namespace["subprocess"].PIPE,
-                stderr=namespace["subprocess"].STDOUT,
-                timeout=5.0,
-                check=False,
-            )
-            run.side_effect = FileNotFoundError("v4l2-ctl")
-            self.assertIn(
-                "settings unavailable",
-                namespace["camera_settings"]("/dev/finger_camera_left"),
-            )
         with tempfile.TemporaryDirectory() as directory:
             preview = Path(directory) / "left.jpg"
             writer = namespace["NativeMjpegWriter"].__new__(
                 namespace["NativeMjpegWriter"]
             )
             writer.preview_file = preview
+            writer.preview_fps = namespace["PREVIEW_FPS"]
             writer._next_preview_ns = 0
             writer._preview_disabled = False
             writer.side = "left"
@@ -277,8 +258,8 @@ class TestEpisodePostprocessor(unittest.TestCase):
 
         message = SimpleNamespace(receive_steady_ns=123, issue_steady_ns=0)
         self.assertEqual(
-            _aligned_time_ns(message, 999, 1_000),
-            (1_123, "receive_steady_ns"),
+            _topic_time_ns("/raw/marvin/joint_state", message, 999),
+            (999, "bag_time_ns"),
         )
 
     def test_validator_accepts_two_native_mjpeg_fragments(self):

@@ -1,6 +1,5 @@
 """Merge one episode into a complete MCAP and derive world-frame TCP poses."""
 
-import hashlib
 import heapq
 import json
 import math
@@ -11,6 +10,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
+
+from .collection_config import write_json
+from .episode_validator import sha256_file
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -149,14 +151,6 @@ class UrdfForwardKinematics:
         return result
 
 
-def _sha256(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _header_time_ns(message):
     header = getattr(message, "header", None)
     if header is None and hasattr(message, "image"):
@@ -168,25 +162,16 @@ def _header_time_ns(message):
     if hasattr(message, "data"):
         try:
             return int(json.loads(message.data).get("wall_time_ns", 0))
-        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        except (AttributeError, TypeError, ValueError):
             pass
     return 0
 
 
-def _steady_time_ns(message):
-    receive_time_ns = int(getattr(message, "receive_steady_ns", 0))
-    if receive_time_ns:
-        return receive_time_ns, "receive_steady_ns"
-    issue_time_ns = int(getattr(message, "issue_steady_ns", 0))
-    if issue_time_ns:
-        return issue_time_ns, "issue_steady_ns"
-    return 0, None
-
-
-def _aligned_time_ns(message, bag_time_ns, steady_to_wall_offset_ns):
-    steady_time_ns, source = _steady_time_ns(message)
-    if steady_time_ns:
-        return steady_time_ns + steady_to_wall_offset_ns, source
+def _topic_time_ns(topic, message, bag_time_ns):
+    """Use acquisition wall time, except diagnostics whose publishers may interleave."""
+    if topic == "/diagnostics":
+        return int(bag_time_ns), "bag_time_ns"
+    # Keep acquisition wall time, never reconstruct it from a monotonic clock.
     header_time_ns = _header_time_ns(message)
     if header_time_ns:
         return header_time_ns, (
@@ -196,23 +181,6 @@ def _aligned_time_ns(message, bag_time_ns, steady_to_wall_offset_ns):
             else "payload.wall_time_ns"
         )
     return int(bag_time_ns), "bag_time_ns"
-
-
-def _topic_aligned_time_ns(
-    topic,
-    message,
-    bag_time_ns,
-    steady_to_wall_offset_ns,
-    topic_time_offset_ns=0,
-):
-    # DiagnosticArray has no monotonic timestamp and /diagnostics has multiple
-    # publishers, so DDS arrival order is the only stable ordering key.
-    if topic == "/diagnostics":
-        return int(bag_time_ns), "bag_time_ns"
-    aligned_time_ns, source = _aligned_time_ns(
-        message, bag_time_ns, steady_to_wall_offset_ns
-    )
-    return aligned_time_ns - int(topic_time_offset_ns), source
 
 
 def _pose_message(message_type, source_message, arm, transform, source):
@@ -250,7 +218,7 @@ def postprocess_episode(
         import rosbag2_py
         from rclpy.serialization import deserialize_message, serialize_message
         from rosidl_runtime_py.utilities import get_message
-        from teleop_msgs.msg import JointCommand, MarvinState, TcpPose
+        from teleop_msgs.msg import TcpPose
     except (ImportError, OSError) as error:
         raise RuntimeError(
             "post-processing requires sourced ROS2 and a built teleop_msgs workspace"
@@ -263,19 +231,6 @@ def postprocess_episode(
         if metadata_path.is_file()
         else {}
     )
-    topic_time_offsets_ns = {
-        f"/raw/das/{side}/image/compressed": int(
-            profile.get("latency_correction_ns", 0)
-        )
-        for side, profile in metadata.get("camera_profiles", {}).items()
-        if side in ("left", "right")
-        and profile.get("latency_correction_ns") is not None
-    }
-    if any(
-        not 0 <= value <= 1_000_000_000
-        for value in topic_time_offsets_ns.values()
-    ):
-        raise ValueError("camera latency corrections must be within [0, 1 s]")
     state_path = episode_directory / "state"
     if not (state_path / "metadata.yaml").is_file():
         raise FileNotFoundError(f"state bag not found: {state_path}")
@@ -325,24 +280,6 @@ def postprocess_episode(
     message_types = {
         name: get_message(item.type) for name, item in topic_metadata.items()
     }
-    calibration_reader = rosbag2_py.SequentialReader()
-    calibration_reader.open(
-        rosbag2_py.StorageOptions(uri=str(state_path), storage_id="mcap"),
-        rosbag2_py.ConverterOptions("", ""),
-    )
-    clock_offsets_ns = []
-    while calibration_reader.has_next():
-        topic, serialized, _bag_time_ns = calibration_reader.read_next()
-        message = deserialize_message(serialized, message_types[topic])
-        steady_time_ns, _source = _steady_time_ns(message)
-        header_time_ns = _header_time_ns(message)
-        if steady_time_ns and header_time_ns:
-            clock_offsets_ns.append(header_time_ns - steady_time_ns)
-    if not clock_offsets_ns:
-        raise ValueError("state bag contains no steady/wall clock pairs")
-    clock_offsets_ns.sort()
-    steady_to_wall_offset_ns = clock_offsets_ns[len(clock_offsets_ns) // 2]
-
     cursors = []
     for topic, input_path in topic_input_paths.items():
         reader = rosbag2_py.SequentialReader()
@@ -356,7 +293,6 @@ def postprocess_episode(
                 "reader": reader,
                 "topic": topic,
                 "message_type": message_types[topic],
-                "last_aligned_time_ns": None,
             }
         )
 
@@ -406,17 +342,8 @@ def postprocess_episode(
             if topic != cursor["topic"]:
                 raise RuntimeError(f"unexpected filtered topic: {topic}")
             message = deserialize_message(serialized, cursor["message_type"])
-            aligned_time_ns, alignment_source = _topic_aligned_time_ns(
-                topic,
-                message,
-                bag_time_ns,
-                steady_to_wall_offset_ns,
-                topic_time_offsets_ns.get(topic, 0),
-            )
-            previous_time_ns = cursor["last_aligned_time_ns"]
-            if previous_time_ns is not None and aligned_time_ns < previous_time_ns:
-                raise ValueError(f"aligned time regressed for {topic}")
-            cursor["last_aligned_time_ns"] = aligned_time_ns
+            aligned_time_ns, alignment_source = _topic_time_ns(topic, message, bag_time_ns)
+            # System time can step backwards. Preserve it; validation reports it.
             sources = alignment_source_counts[topic]
             sources[alignment_source] = sources.get(alignment_source, 0) + 1
             delay_ns = int(bag_time_ns) - aligned_time_ns
@@ -438,7 +365,6 @@ def postprocess_episode(
                 (
                     aligned_time_ns,
                     index,
-                    int(bag_time_ns),
                     serialized,
                     message,
                 ),
@@ -447,21 +373,16 @@ def postprocess_episode(
         for index in range(len(cursors)):
             push_next(index)
         while pending:
-            aligned_time_ns, index, _bag_time_ns, serialized, message = (
+            aligned_time_ns, index, serialized, message = (
                 heapq.heappop(pending)
             )
             topic = cursors[index]["topic"]
             writer.write(topic, serialized, aligned_time_ns)
             counts[topic] += 1
             if topic in DERIVED_TOPICS:
-                source_type = (
-                    MarvinState
-                    if topic == "/raw/marvin/joint_state"
-                    else JointCommand
-                )
                 source_name = (
                     "joint_feedback_fk"
-                    if source_type is MarvinState
+                    if topic == "/raw/marvin/joint_state"
                     else "teleop_joint_target_fk"
                 )
                 for arm, target_topic in enumerate(DERIVED_TOPICS[topic]):
@@ -497,13 +418,14 @@ def postprocess_episode(
         ],
         "output_bag": str(output_path),
         "urdf": str(urdf_path),
-        "urdf_sha256": _sha256(urdf_path),
+        "urdf_sha256": sha256_file(urdf_path),
         "alignment": {
-            "clock": "CLOCK_MONOTONIC",
-            "steady_to_wall_offset_ns": steady_to_wall_offset_ns,
-            "calibration_samples": len(clock_offsets_ns),
-            "calibration_span_ns": clock_offsets_ns[-1] - clock_offsets_ns[0],
-            "topic_time_offsets_ns": topic_time_offsets_ns,
+            "clock": "CLOCK_REALTIME",
+            # Retain schema fields so historical readers can distinguish old alignment.
+            "steady_to_wall_offset_ns": None,
+            "calibration_samples": 0,
+            "calibration_span_ns": 0,
+            "topic_time_offsets_ns": {},
             "source_counts": alignment_source_counts,
             "original_bag_delay": bag_delay_stats,
         },
@@ -512,9 +434,5 @@ def postprocess_episode(
     if metadata_path.is_file() and output_path == episode_directory / "data":
         metadata["processed_bag"] = output_path.name
         metadata["postprocessing"] = summary
-        temporary_metadata = metadata_path.with_suffix(".json.tmp")
-        temporary_metadata.write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        temporary_metadata.replace(metadata_path)
+        write_json(metadata_path, metadata)
     return summary

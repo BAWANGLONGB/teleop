@@ -2,7 +2,6 @@
 """Record one synchronized-by-timestamp state/vision collection episode."""
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -11,47 +10,24 @@ import signal
 import subprocess
 import threading
 import time
-import uuid
 from pathlib import Path
 
-from xr_marvin_teleop.common.episode_postprocessor import postprocess_episode
-from xr_marvin_teleop.common.episode_package import package_episode
-from xr_marvin_teleop.common.episode_validator import validate_episode
+from xr_marvin_teleop.common.episode_video import (
+    activity_lock, add_video_arguments, video_options,
+)
+from xr_marvin_teleop.common.collection_config import (
+    DEFAULT_CONFIG, read_json, write_json, configure_parser, apply_config,
+    freeze_arguments, check_active_devices,
+)
+from xr_marvin_teleop.common.episode_validator import sha256_file
+from xr_marvin_teleop.common.episode_review import EPISODE_ID, new_episode_id, session_path, session_record
 from xr_marvin_teleop.hardware.interface.das_finger import (
     ARM_NAMES,
     load_das_finger_configurations,
 )
 
 
-STATE_TOPICS = (
-    "/raw/pico/frame",
-    "/raw/marvin/joint_state",
-    "/command/marvin/joint_target",
-    "/command/das/target",
-    "/raw/das/left/state",
-    "/raw/das/right/state",
-    "/raw/das/left/tactile",
-    "/raw/das/right/tactile",
-    "/diagnostics",
-    "/episode/state",
-    "/episode/event",
-)
-
-
-def _write_json(path, value):
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    temporary_path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    temporary_path.replace(path)
-
-
-def _sha256(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+STATE_TOPICS = tuple(read_json(DEFAULT_CONFIG)["recording"]["state_topics"])
 
 
 def _git_metadata(project_root):
@@ -140,7 +116,7 @@ class EpisodePublisher:
             self._rclpy.shutdown()
 
 
-def _recorder_command(output, topics, config, qos):
+def _recorder_command(output, topics, config, qos, cache_bytes=None):
     return [
         "ros2",
         "bag",
@@ -154,7 +130,7 @@ def _recorder_command(output, topics, config, qos):
         "--qos-profile-overrides-path",
         str(qos),
         "--max-cache-size",
-        str(256 * 1024 * 1024),
+        str(read_json(DEFAULT_CONFIG)["recording"]["state_cache_bytes"] if cache_bytes is None else cache_bytes),
         *topics,
     ]
 
@@ -167,6 +143,7 @@ def _camera_command(
     storage_config,
     ready_file,
     preview_file=None,
+    preview_fps=None,
 ):
     command = [
         "/usr/bin/python3",
@@ -188,6 +165,8 @@ def _camera_command(
     ]
     if preview_file is not None:
         command.extend(("--preview-file", str(preview_file)))
+    if preview_fps is not None:
+        command.extend(("--preview-fps", str(preview_fps)))
     return command
 
 
@@ -207,7 +186,7 @@ def _start_recorder(command, log_path):
     return process, log
 
 
-def _stop_recorder(process):
+def _stop_recorder(process, stop_timeout=10.0, term_timeout=3.0):
     if process.poll() is not None:
         return
     try:
@@ -215,11 +194,11 @@ def _stop_recorder(process):
     except ProcessLookupError:
         return
     try:
-        process.wait(timeout=10.0)
+        process.wait(timeout=stop_timeout)
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGTERM)
         try:
-            process.wait(timeout=3.0)
+            process.wait(timeout=term_timeout)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=1.0)
@@ -238,13 +217,11 @@ def _require_mcap():
             "sudo apt-get install ros-humble-rosbag2-storage-mcap"
         )
     try:
-        import cv2  # noqa: F401
-        import pyarrow  # noqa: F401
         import rosbag2_py  # noqa: F401
         from teleop_msgs.msg import CompressedImageFrame, TcpPose  # noqa: F401
     except (ImportError, OSError) as error:
         raise RuntimeError(
-            "post-processing requires ROS2, teleop_msgs, OpenCV, and pyarrow"
+            "recording requires ROS2 and built teleop_msgs"
         ) from error
 
 
@@ -252,25 +229,47 @@ def main():
     project_root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description="Record one teleoperation episode")
     parser.add_argument("--task", required=True)
+    parser.add_argument("--session", help="existing stable Session ID; default groups by date")
+    parser.add_argument("--episode-id", help="UI-provided identity for reliable result annotation")
     parser.add_argument("--operator", default=os.environ.get("USER", "unknown"))
-    parser.add_argument("--robot-model", default="Marvin")
+    parser.add_argument("--robot-model")
     parser.add_argument("--notes", default="")
     parser.add_argument("--metadata", action="append", default=[], metavar="KEY=VALUE")
-    parser.add_argument("--calibration", action="append", default=[], type=Path)
+    parser.add_argument("--calibration", action="append", type=Path)
     parser.add_argument("--das-config", type=Path)
-    parser.add_argument("--output-root", type=Path, default=project_root / "dataset")
+    parser.add_argument("--output-root", type=Path)
     parser.add_argument("--no-vision", action="store_true")
     parser.add_argument("--max-duration", type=float)
+    parser.add_argument("--unlimited-duration", dest="max_duration", action="store_const", const=None)
     parser.add_argument("--ready-file", type=Path)
-    parser.add_argument("--camera-startup-timeout", type=float, default=10.0)
+    parser.add_argument("--camera-startup-timeout", type=float)
     parser.add_argument("--preview-root", type=Path)
+    add_video_arguments(parser)
+    parser.add_argument("--vision", dest="no_vision", action="store_false")
+    parser.add_argument("--preview", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--preview-fps", type=int)
+    configure_parser(parser)
     arguments = parser.parse_args()
-    if not arguments.task.strip():
+    try:
+        config = apply_config(arguments)
+        outputs = video_options(arguments)
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
+    if arguments.print_effective_config:
+        print(json.dumps(config, ensure_ascii=False, indent=2))
+        return
+    if not arguments.task or not arguments.task.strip():
         parser.error("--task must not be empty")
-    if arguments.max_duration is not None and arguments.max_duration <= 0.0:
-        parser.error("--max-duration must be positive")
-    if arguments.camera_startup_timeout <= 0.0:
-        parser.error("--camera-startup-timeout must be positive")
+    session_id = arguments.session or f"session_{time.strftime('%Y-%m-%d')}"
+    try:
+        session_directory = session_path(arguments.output_root, session_id)
+        if arguments.session and not session_directory.is_dir():
+            raise ValueError("指定的 Session 不存在")
+        episode_id = arguments.episode_id or new_episode_id()
+        if not EPISODE_ID.fullmatch(episode_id):
+            raise ValueError("Episode ID 格式无效")
+    except ValueError as error:
+        parser.error(str(error))
     if arguments.preview_root is not None:
         arguments.preview_root = arguments.preview_root.expanduser().resolve()
         arguments.preview_root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -281,30 +280,23 @@ def main():
     except ValueError as error:
         parser.error(str(error))
 
-    configurations = None
     if not arguments.no_vision:
-        if arguments.das_config is None:
-            parser.error("--das-config is required unless --no-vision is used")
-        arguments.das_config = arguments.das_config.expanduser().resolve()
         if not arguments.das_config.is_file():
             parser.error(f"DAS config not found: {arguments.das_config}")
-        configurations = load_das_finger_configurations(arguments.das_config)
+        load_das_finger_configurations(arguments.das_config)
 
-    calibration_sources = []
     for path in arguments.calibration:
-        path = path.expanduser().resolve()
         if not path.is_file():
             parser.error(f"calibration file not found: {path}")
-        calibration_sources.append(path)
     _require_mcap()
-    now = time.localtime()
-    episode_id = f"episode_{time.strftime('%H%M%S', now)}_{uuid.uuid4().hex[:8]}"
-    episode_directory = (
-        arguments.output_root.expanduser().resolve()
-        / f"session_{time.strftime('%Y-%m-%d', now)}"
-        / episode_id
-    )
+    episode_directory = session_directory / episode_id
     episode_directory.mkdir(parents=True, exist_ok=False)
+    config_path = freeze_arguments(arguments, episode_directory / "config", require_devices=False)
+    config = arguments.effective_config
+    check_active_devices(config)
+    # Only use snapshotted files after this point, including per-camera settings.
+    configurations = None if arguments.no_vision else load_das_finger_configurations(arguments.das_config)
+    calibration_sources = arguments.calibration
     calibrations = []
     calibration_directory = episode_directory / "calibration"
     for index, path in enumerate(calibration_sources):
@@ -316,12 +308,14 @@ def main():
                 "source_path": str(path),
                 "snapshot": str(snapshot_path.relative_to(episode_directory)),
                 "size_bytes": snapshot_path.stat().st_size,
-                "sha256": _sha256(snapshot_path),
+                "sha256": sha256_file(snapshot_path),
             }
         )
     metadata = {
         "schema_version": 1,
         "episode_id": episode_id,
+        "session": session_id,
+        "session_name": session_record(session_directory)["name"],
         "status": "starting",
         "task": arguments.task,
         "operator": arguments.operator,
@@ -342,27 +336,31 @@ def main():
             side: {
                 "resolution": configuration.camera_resolution,
                 "fps": configuration.camera_fps,
-                "latency_correction_ns": (
-                    None
-                    if configuration.camera_latency_ms is None
-                    else round(configuration.camera_latency_ms * 1_000_000)
-                ),
+                "latency_correction_ns": 0,
             }
             for side, configuration in zip(ARM_NAMES, configurations or ())
         },
     }
+    metadata["video_outputs"] = outputs
+    metadata["capture_config"] = read_json(config_path)
+    metadata["config_snapshot"] = "config/collection.json"
+    metadata["config_files"] = [
+        {"snapshot": str(path.relative_to(episode_directory)), "sha256": sha256_file(path)}
+        for path in sorted(config_path.parent.iterdir()) if path.is_file()
+    ]
+    metadata["timestamp_clock"] = "CLOCK_REALTIME"
     metadata_path = episode_directory / "metadata.json"
-    _write_json(metadata_path, metadata)
+    write_json(metadata_path, metadata)
 
-    config_root = project_root / "config" / "data_collection"
     process_specs = [
         (
             "state",
             _recorder_command(
                 episode_directory / "state",
-                STATE_TOPICS,
-                config_root / "mcap_state.yaml",
-                config_root / "qos_overrides.yaml",
+                config["recording"]["state_topics"],
+                config["recording"]["state_storage"],
+                config["recording"]["qos"],
+                config["recording"]["state_cache_bytes"],
             ),
         )
     ]
@@ -380,13 +378,14 @@ def main():
                     side,
                     configuration,
                     episode_directory / f"vision_{side}",
-                    config_root / "mcap_mjpeg.yaml",
+                    config["recording"]["camera_storage"],
                     camera_ready_files[f"vision_{side}"],
                     (
                         None
                         if arguments.preview_root is None
                         else arguments.preview_root / f"{side}.jpg"
                     ),
+                    config["preview"]["fps"],
                 ),
             )
             for side, configuration in zip(ARM_NAMES, configurations)
@@ -395,11 +394,13 @@ def main():
     recorders = []
     stop_requested = threading.Event()
     previous_handlers = {}
+    recording_lock = None
 
     def request_stop(_signal_number, _frame):
         stop_requested.set()
 
     try:
+        recording_lock = activity_lock(arguments.output_root)
         for signal_number in (signal.SIGINT, signal.SIGTERM):
             previous_handlers[signal_number] = signal.signal(
                 signal_number, request_stop
@@ -439,7 +440,7 @@ def main():
         for path in episode_directory.glob(".vision_*.ready"):
             path.unlink()
         metadata["status"] = "recording"
-        _write_json(metadata_path, metadata)
+        write_json(metadata_path, metadata)
         publisher.publish_state("recording", episode_id)
         publisher.publish_event("start", episode_id)
         if arguments.ready_file is not None:
@@ -462,29 +463,31 @@ def main():
         publisher.publish_event("stop", episode_id)
         publisher.publish_state("finalizing", episode_id)
         time.sleep(0.25)
-        for _name, process, _log in reversed(recorders):
-            _stop_recorder(process)
+        for name, process, _log in reversed(recorders):
+            _stop_recorder(process, config["runtime"]["recorder_stop_timeout_s"], config["runtime"]["recorder_term_timeout_s"])
+            if process.returncode != 0:
+                raise RuntimeError(f"{name} recorder did not close cleanly: {process.returncode}")
         metadata["status"] = "completed"
         metadata["ended_at_ns"] = time.time_ns()
-        _write_json(metadata_path, metadata)
-        print("Post-processing state and vision into one enriched MCAP...", flush=True)
-        postprocess_episode(episode_directory)
-        manifest = validate_episode(episode_directory)
-        package_path = package_episode(episode_directory)
-        print(f"Episode {manifest['status']}: {package_path}")
-        raise SystemExit(0 if manifest["status"] != "rejected" else 1)
+        metadata["export_status"] = "pending"
+        write_json(metadata_path, metadata)
+        print(f"Recorded {episode_directory}; offline export pending. "
+              "When teleoperation/collection are stopped, run scripts/data/postprocess_episode.py "
+              f"{episode_directory}", flush=True)
     except Exception:
         metadata["status"] = "aborted"
         metadata["ended_at_ns"] = time.time_ns()
-        _write_json(metadata_path, metadata)
+        write_json(metadata_path, metadata)
         raise
     finally:
         for _name, process, log in reversed(recorders):
             try:
-                _stop_recorder(process)
+                _stop_recorder(process, config["runtime"]["recorder_stop_timeout_s"], config["runtime"]["recorder_term_timeout_s"])
             finally:
                 log.close()
         publisher.close()
+        if recording_lock is not None:
+            recording_lock.close()
         for signal_number, handler in previous_handlers.items():
             signal.signal(signal_number, handler)
 

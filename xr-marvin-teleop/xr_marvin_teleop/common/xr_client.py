@@ -25,6 +25,8 @@ class XrSnapshot:
     button_b: bool
     trigger_values: tuple[float, float] = (0.0, 0.0)
     thumbstick_y_values: tuple[float, float] = (0.0, 0.0)
+    button_x: bool = False
+    button_y: bool = False
 
     def __post_init__(self):
         timestamp_ns = int(self.timestamp_ns)

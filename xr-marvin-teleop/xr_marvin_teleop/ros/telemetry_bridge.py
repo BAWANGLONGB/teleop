@@ -448,6 +448,3 @@ class Ros2DataBridge:
         self._node.destroy_node()
         if self._owns_context and self._rclpy.ok():
             self._rclpy.shutdown()
-
-
-Ros2TelemetryBridge = Ros2DataBridge

@@ -11,10 +11,22 @@ import numpy as np
 DEFAULT_SCALE_FACTOR = 1.2
 MIN_SCALE_FACTOR = 0.5
 MAX_SCALE_FACTOR = 1.5
+# Calibration acceptance still uses this fixed Marvin-space direction (+Y/+Z).
+# Changing XR axes or the reference posture requires revalidating it on hardware.
 MARVIN_REST_TO_FORWARD_TCP_DELTA = np.array([0.0, 0.558866, 0.664989])
 MARVIN_REST_TO_FORWARD_TCP_TRAVEL = float(
     np.linalg.norm(MARVIN_REST_TO_FORWARD_TCP_DELTA)
 )
+
+
+def ensure_scale_calibration(calibration_path):
+    """Persist the default when no calibration exists; never replace an existing file."""
+    calibration_path = Path(calibration_path).expanduser()
+    if not calibration_path.exists():
+        save_scale_calibration(
+            calibration_path,
+            ArmLengthCalibrationResult("default", DEFAULT_SCALE_FACTOR),
+        )
 
 
 def resolve_scale_factor(requested_scale_factor, calibration_path):
@@ -22,10 +34,10 @@ def resolve_scale_factor(requested_scale_factor, calibration_path):
         value = float(requested_scale_factor)
         if not np.isfinite(value) or value <= 0.0:
             raise ValueError("scale_factor must be positive and finite")
+        ensure_scale_calibration(calibration_path)
         return value
+    ensure_scale_calibration(calibration_path)
     calibration_path = Path(calibration_path).expanduser()
-    if not calibration_path.is_file():
-        return DEFAULT_SCALE_FACTOR
     with calibration_path.open(encoding="utf-8") as calibration_file:
         calibration_record = json.load(calibration_file)
     if (

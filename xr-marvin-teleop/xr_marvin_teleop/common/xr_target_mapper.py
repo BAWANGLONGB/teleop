@@ -1,19 +1,10 @@
 import numpy as np
 
 
-# Operator stands behind Marvin: OpenXR right/up/forward -> Marvin +X/+Z/+Y.
-
-# OPENXR_TO_MARVIN_ROTATION = np.array(
-#     [[1.0, 0.0, 0.0], 
-#      [0.0, 0.0, -1.0], 
-#      [0.0, 1.0, 0.0]]
-# )
+# OpenXR right/up/forward (+X/+Y/-Z) -> Marvin +Y/+Z/-X.
 OPENXR_TO_MARVIN_ROTATION = np.array(
-    [[0.0, 0.0, 1.0], 
-     [1.0, 0.0, 0.0], 
-     [0.0, 1.0, 0.0]]
+    [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
 )
-
 
 
 def _rotation_matrix_from_openxr_pose(openxr_pose):
@@ -32,7 +23,7 @@ def _rotation_matrix_from_openxr_pose(openxr_pose):
 
 
 def transform_controller_poses_to_marvin_frame(xr_snapshot):
-    """Return controller poses in the fixed OpenXR tracking frame."""
+    """Express fixed tracking-space poses in Marvin axes, independent of the HMD."""
     marvin_controller_poses = []
     for controller_pose in (
         xr_snapshot.left_controller_pose,
@@ -42,6 +33,7 @@ def transform_controller_poses_to_marvin_frame(xr_snapshot):
         marvin_controller_poses.append(
             (
                 OPENXR_TO_MARVIN_ROTATION @ controller_pose[:3],
+                # Change both rotation bases; left multiplication alone is insufficient.
                 OPENXR_TO_MARVIN_ROTATION
                 @ controller_rotation
                 @ OPENXR_TO_MARVIN_ROTATION.T,

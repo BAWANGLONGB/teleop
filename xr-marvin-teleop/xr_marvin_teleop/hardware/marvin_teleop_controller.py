@@ -14,11 +14,11 @@ from xr_marvin_teleop.common.xr_target_mapper import (
     XrTargetMapper,
     transform_controller_poses_to_marvin_frame,
 )
-# 拿酸梅汤不会抖的参数（有待优化）
+
+
+# Hardware-tuned impedance gains; retain per-arm CLI overrides for calibration.
 DEFAULT_JOINT_K = (4.0, 4.0, 4.0, 2.0, 2.0, 2.0, 2.0)
 DEFAULT_JOINT_D = (0.3, 0.3, 0.3, 0.3, 0.2, 0.2, 0.2)
-# DEFAULT_JOINT_K = (4.0, 4.0, 3.0, 3.0, 1.0, 1.0, 1.0)
-# DEFAULT_JOINT_D = (0.3, 0.3, 0.3, 0.3, 0.2, 0.2, 0.2)
 DEFAULT_CONTROL_HZ = 50
 DEFAULT_JOINT_VELOCITY_RATIO = 10
 DEFAULT_JOINT_ACCELERATION_RATIO = 10
@@ -212,7 +212,6 @@ class MarvinHardwareTeleopController:
         self.pd_settle_seconds = float(pd_settle_seconds)
         self.session_logger = session_logger
         self.telemetry_publisher = telemetry_publisher
-        self._sample_id = 0
         self.gripper_control_enabled = bool(gripper_control_enabled)
         self.gripper_rate = gripper_rate
         self.gripper_command_period_seconds = 1.0 / gripper_command_hz
@@ -534,6 +533,7 @@ class MarvinHardwareTeleopController:
                 self._return_start_times[arm_index] = cycle_time_seconds
                 self._return_start_q_rad[arm_index] = arm_q_rad.copy()
             elif self._previous_grip_states[arm_index]:
+                # On release, hold measured joints to avoid pursuing an old IK target.
                 q_command_rad[arm_joint_slice] = arm_q_rad
                 self._last_ik_q_rad[arm_index] = arm_q_rad.copy()
             return_start_time = self._return_start_times[arm_index]
@@ -577,6 +577,7 @@ class MarvinHardwareTeleopController:
         if not self.gripper_control_enabled:
             return
         if reset_requested:
+            # B also closes enabled grippers; arm return and gripper reset are coupled.
             self._gripper_closedness.fill(1.0)
             self._last_gripper_update_time = cycle_time_seconds
             self._send_gripper_command(cycle_time_seconds)
@@ -673,6 +674,7 @@ class MarvinHardwareTeleopController:
                 self._nsp_lateral_anchors[arm_index] = None
                 self._nsp_target_angles_deg[arm_index] = 0.0
                 continue
+            # Legacy --nsp-lateral uses Marvin X (OpenXR Z), not OpenXR lateral X.
             lateral_position = float(controller_poses_marvin[arm_index][0][0])
             anchor = self._nsp_lateral_anchors[arm_index]
             if anchor is None:
@@ -717,25 +719,21 @@ class MarvinHardwareTeleopController:
         )
 
     def _record_control_sample(self, xr_snapshot, robot_feedback, q_command_rad):
+        if self.session_logger is None:
+            return
         gripper_state_getter = getattr(self.adapter, "get_gripper_state", None)
         gripper_state = (
             None if gripper_state_getter is None else gripper_state_getter()
         )
-        self._sample_id += 1
-        sample_monotonic_ns = time.monotonic_ns()
-        wall_time_ns = time.time_ns()
-        if self.session_logger is not None:
-            self.session_logger.record_control_cycle(
-                xr_snapshot,
-                robot_feedback,
-                q_command_rad,
-                self.scale_factor,
-                self.gripper_closedness,
-                gripper_state=gripper_state,
-                sample_id=self._sample_id,
-                sample_monotonic_ns=sample_monotonic_ns,
-                wall_time_ns=wall_time_ns,
-            )
+        # The logger owns sample IDs and timestamps; ROS streams have their own IDs.
+        self.session_logger.record_control_cycle(
+            xr_snapshot,
+            robot_feedback,
+            q_command_rad,
+            self.scale_factor,
+            self.gripper_closedness,
+            gripper_state=gripper_state,
+        )
 
     def execute_control_cycle(self, cycle_time_seconds=None):
         if not self._hardware_prepared:
@@ -765,6 +763,7 @@ class MarvinHardwareTeleopController:
             self._xr_frame_available = False
             self.pose_mapper.reset_arm()
             self._previous_grip_states = (False, False)
+            # Require a new button edge after recovery, never replay a held A/B press.
             self._previous_button_a = True
             self._previous_button_b = True
             self._nsp_current_angles_deg.fill(0.0)

@@ -7,6 +7,8 @@ import os
 import re
 import shutil
 import signal
+import socket
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -27,21 +29,30 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from xr_marvin_teleop.common.episode_package import read_attachment, write_episode_mcap
+from xr_marvin_teleop.common.collection_config import DEFAULT_CONFIG, load_config, validate_config
+from xr_marvin_teleop.common.episode_review import (
+    SESSION_ID, new_episode_id, session_path, session_record, save_session, read_review, save_review,
+    episode_path as session_episode_path, annotation_lock,
+)
+from xr_marvin_teleop.common.episode_video import activity_lock
+
+COLLECTION_CONFIG_PATH = DEFAULT_CONFIG
+COLLECTION_SETTINGS = validate_config(load_config())
 
 CONDA_SETUP = WORKSPACE / ".miniconda-xr" / "etc" / "profile.d" / "conda.sh"
 ROS_BASE_SETUP = Path("/opt/ros/humble/setup.bash")
 ROS_SETUP = PROJECT_ROOT / "ros2_ws" / "install" / "setup.bash"
-DATASET_ROOT = PROJECT_ROOT / "dataset"
+DATASET_ROOT = Path(COLLECTION_SETTINGS["paths"]["output_root"])
 COLLECTION_SCRIPT = PROJECT_ROOT / "scripts" / "data" / "run_collection.py"
 RESET_SCRIPT = PROJECT_ROOT / "scripts" / "hardware" / "reset_marvin_hardware.py"
 TELEOP_PYTHON = WORKSPACE / ".miniconda-xr" / "envs" / "Teleop" / "bin" / "python"
 ROBOTICS_SERVICE_SCRIPT = Path("/opt/apps/roboticsservice/runService.sh")
 ROBOTICS_SERVICE_PORTS = (63901, 60061)
-MARVIN_IP = "192.168.1.190"
-PREVIEW_ROOT = Path("/dev/shm") / f"fieldnote-preview-{os.getuid()}"
-DAS_CONFIG = PROJECT_ROOT / "config" / "das_gripper.example.json"
-DAS_SDK_ROOT = WORKSPACE / "gen_finger_con_python_sdk_release"
-SCALE_CALIBRATION = PROJECT_ROOT / "logs" / "marvin_scale_calibration.json"
+MARVIN_IP = COLLECTION_SETTINGS["robot"]["ip"]
+PREVIEW_ROOT = Path(COLLECTION_SETTINGS["preview"]["root"]) if COLLECTION_SETTINGS["preview"]["root"] else None
+DAS_CONFIG = Path(COLLECTION_SETTINGS["paths"]["das_config"])
+DAS_SDK_ROOT = Path(COLLECTION_SETTINGS["paths"]["das_sdk_root"])
+SCALE_CALIBRATION = Path(COLLECTION_SETTINGS["paths"]["scale_calibration"])
 EPISODE_RE = re.compile(r"episode_\d{6}_[0-9a-f]{8}\Z")
 KNOWN_CAMERA_FORMATS = {"640x480": (60,), "1600x1296": (60,)}
 STATE_LOCK = threading.Lock()
@@ -52,6 +63,9 @@ ERROR_LOCK = threading.Lock()
 COLLECTION = None
 DEVICES = None
 LAST_STATUS_ERRORS = {}
+HOTKEY_SOCKET_PATH = None
+HOTKEY_AFTER_NS = 0
+HOTKEY_STATUS = {}
 
 
 class ApiError(Exception):
@@ -110,7 +124,7 @@ def package_metadata(path):
     return json.loads(read_attachment(path, "meta/meta.json"))
 
 
-def episode_path(dataset_root, episode_id):
+def episode_path(dataset_root, episode_id, *, prefer_directory=False):
     if not EPISODE_RE.fullmatch(episode_id):
         raise ApiError(HTTPStatus.BAD_REQUEST, "Episode ID 格式无效")
     root = dataset_root.resolve()
@@ -124,7 +138,7 @@ def episode_path(dataset_root, episode_id):
                     packaged.append(path)
             except (OSError, ValueError, KeyError, json.JSONDecodeError):
                 continue
-    matches = packaged or legacy
+    matches = (legacy or packaged) if prefer_directory else (packaged or legacy)
     if len(matches) != 1:
         raise ApiError(HTTPStatus.NOT_FOUND, "Episode 不存在")
     path = matches[0]
@@ -133,15 +147,22 @@ def episode_path(dataset_root, episode_id):
     return path
 
 
-def move_episode_to_trash(dataset_root, episode_id, collection_active=False):
+def move_episode_to_trash(dataset_root, episode_id, collection_active=False, *, session=None):
     if collection_active:
         raise ApiError(HTTPStatus.CONFLICT, "采集中不能删除 Episode")
-    source = episode_path(dataset_root, episode_id)
-    trash = dataset_root.resolve() / ".trash"
-    trash.mkdir(exist_ok=True)
-    destination = trash / f"{episode_id}_{time.time_ns()}{source.suffix}"
-    source.replace(destination)
-    return destination
+    with activity_lock(dataset_root), annotation_lock(dataset_root):
+        source = (session_episode_path(dataset_root, session, episode_id) if session
+                  else episode_path(dataset_root, episode_id, prefer_directory=True))
+        if source.is_dir() and (source / "metadata.json").is_file():
+            if read_json(source / "metadata.json").get("status") in ("starting", "recording", "finalizing"):
+                raise ApiError(HTTPStatus.CONFLICT, "本段仍在录制或保存，不能删除")
+        trash = dataset_root.resolve() / ".trash"
+        if trash.is_symlink():
+            raise ValueError("回收站路径无效")
+        trash.mkdir(exist_ok=True)
+        destination = trash / f"{source.parent.name}__{episode_id}_{time.time_ns()}{source.suffix}"
+        source.replace(destination)
+        return destination
 
 
 def open_episode_directory(dataset_root, episode_id, opener=None, launch=None):
@@ -155,27 +176,61 @@ def open_episode_directory(dataset_root, episode_id, opener=None, launch=None):
     return path
 
 
-def mcap_export_files(dataset_root, episode_ids):
+def mcap_export_files(dataset_root, episode_ids, variant="h264"):
+    if variant not in ("h264", "mjpeg"):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "导出格式只能是 h264 或 mjpeg")
     episode_ids = list(dict.fromkeys(episode_ids))
     if len(episode_ids) != 1:
         raise ApiError(HTTPStatus.BAD_REQUEST, "每次只能导出一段 Episode")
-    files = []
-    for episode_id in episode_ids:
-        episode = episode_path(dataset_root, episode_id)
-        if episode.is_file():
-            files.append((episode_id, episode))
-            continue
-        data = episode / "data"
-        if data.is_symlink():
-            raise ApiError(HTTPStatus.BAD_REQUEST, f"{episode_id} 数据路径无效")
-        episode_files = [
-            path for path in sorted(data.glob("*.mcap"))
-            if path.is_file() and not path.is_symlink() and episode in path.resolve().parents
-        ]
-        if not episode_files:
-            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, f"{episode_id} 没有可导出的标准化 MCAP")
-        files.extend((episode_id, path) for path in episode_files)
-    return files
+    episode_id = episode_ids[0]
+    episode = episode_path(dataset_root, episode_id, prefer_directory=True)
+    if episode.is_file():
+        raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, f"{episode_id} 是旧格式，请先迁移并生成 H.264 MCAP")
+    path = episode / "final" / f"{episode_id}.{variant}.mcap"
+    if path.parent.is_symlink() or path.is_symlink() or path.resolve().parent != episode.resolve() / "final":
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"{episode_id} {variant} 数据路径无效")
+    if not path.is_file():
+        raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, f"{episode_id} 尚无 {variant} MCAP，请先打包")
+    return [(episode_id, path)]
+
+
+
+def prepare_mcap_export(payload):
+    variant = payload.get("format", "h264")
+    episode_id = payload.get("episode")
+    if not isinstance(episode_id, str) or not EPISODE_RE.fullmatch(episode_id):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "Episode ID 格式无效")
+    if not START_LOCK.acquire(blocking=False):
+        raise ApiError(HTTPStatus.CONFLICT, "正在启动或打包，请稍后重试")
+    try:
+        try:
+            mcap_export_files(DATASET_ROOT, [episode_id], variant)
+            return {"ready": True}
+        except ApiError as error:
+            if error.status != HTTPStatus.UNPROCESSABLE_ENTITY:
+                raise
+        if collection_active():
+            raise ApiError(HTTPStatus.CONFLICT, "请先停止录制并等待原始数据保存完成")
+        episode = episode_path(DATASET_ROOT, episode_id, prefer_directory=True)
+        if not episode.is_dir():
+            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "旧格式请先迁移")
+        if read_json(episode / "metadata.json").get("status") not in ("completed", "validated", "degraded"):
+            raise ApiError(HTTPStatus.CONFLICT, "本段未正常结束，不能打包")
+        log_path = episode / "export.log"
+        command = [str(TELEOP_PYTHON), str(PROJECT_ROOT / "scripts/data/postprocess_episode.py"),
+                   str(episode), "--output-root", str(DATASET_ROOT), "--add-missing",
+                   "--h264" if variant == "h264" else "--no-h264",
+                   "--mjpeg" if variant == "mjpeg" else "--no-mjpeg"]
+        with log_path.open("ab", buffering=0) as log:
+            result = subprocess.run(command, cwd=PROJECT_ROOT, env=teleop_environment(),
+                                    stdout=log, stderr=subprocess.STDOUT)
+        if result.returncode:
+            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
+                           collection_exit_error(log_path, result.returncode, "MCAP 打包") + f"；日志：{log_path}")
+        mcap_export_files(DATASET_ROOT, [episode_id], variant)
+        return {"ready": True}
+    finally:
+        START_LOCK.release()
 
 
 def episode_record(path):
@@ -195,6 +250,7 @@ def episode_record(path):
         return {
             "id": metadata.get("episode_id", path.stem),
             "session": metadata.get("session", path.parents[2].name),
+            "can_review": False,
             "task": metadata.get("task", "—"),
             "operator": metadata.get("operator", "—"),
             "robot_model": metadata.get("robot_model", "—"),
@@ -230,6 +286,10 @@ def episode_record(path):
     return {
         "id": metadata.get("episode_id", path.name),
         "session": path.parent.name,
+        "session_name": session_record(path.parent)["name"],
+        "can_review": True,
+        "review": read_review(path),
+        "recording_status": metadata.get("status", "unknown"),
         "task": metadata.get("task", "—"),
         "operator": metadata.get("operator", "—"),
         "robot_model": metadata.get("robot_model", "—"),
@@ -241,7 +301,8 @@ def episode_record(path):
     }
 
 
-def list_episodes(dataset_root=DATASET_ROOT):
+def list_episodes(dataset_root=None):
+    dataset_root = DATASET_ROOT if dataset_root is None else dataset_root
     records = {}
     if dataset_root.is_dir():
         for path in dataset_root.glob("session_*/episode_*"):
@@ -256,21 +317,24 @@ def list_episodes(dataset_root=DATASET_ROOT):
                 if path.is_file() and not path.is_symlink():
                     try:
                         record = episode_record(path)
-                        records[record["id"]] = record
+                        records.setdefault(record["id"], record)
                     except (OSError, ValueError, KeyError, json.JSONDecodeError):
                         continue
     return sorted(records.values(), key=lambda item: item["created_at"], reverse=True)
 
 
 def prepare_camera_config(source, destination, resolution, fps):
-    if resolution not in KNOWN_CAMERA_FORMATS or fps not in KNOWN_CAMERA_FORMATS[resolution]:
-        raise ApiError(HTTPStatus.BAD_REQUEST, "相机分辨率与帧率组合不受支持")
     config = read_json(source)
     for side in ("left", "right"):
         if not isinstance(config.get(side), dict):
             raise ApiError(HTTPStatus.INTERNAL_SERVER_ERROR, f"DAS 配置缺少 {side}")
-        config[side]["camera_resolution"] = resolution
-        config[side]["camera_fps"] = fps
+        if resolution is not None:
+            config[side]["camera_resolution"] = resolution
+        if fps is not None:
+            config[side]["camera_fps"] = fps
+        selected = config[side]["camera_resolution"]
+        if selected not in KNOWN_CAMERA_FORMATS or config[side]["camera_fps"] not in KNOWN_CAMERA_FORMATS[selected]:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "相机分辨率与帧率组合不受支持")
     with destination.open("w", encoding="utf-8") as file:
         json.dump(config, file, ensure_ascii=False, indent=2)
         file.write("\n")
@@ -503,8 +567,13 @@ def _job_status(job):
     active = job["process"].poll() is None
     if active and job["status"] == "starting" and job["ready_file"].is_file():
         job["status"] = "running"
+    episode = Path(job["episode_path"]) if job.get("episode_path") else None
     return {
         "active": active,
+        "episode_id": job.get("episode_id"),
+        "session": job.get("session"),
+        "episode_exists": episode is not None and (episode / "metadata.json").is_file(),
+        "review": read_review(episode) if episode is not None else {"result": "unmarked"},
         "status": job["status"],
         "task": job["task"],
         "started_at": job["started_at"],
@@ -554,7 +623,7 @@ def _watch_job(part, process, config_path, ready_file):
     returncode = process.wait()
     config_path.unlink(missing_ok=True)
     ready_file.unlink(missing_ok=True)
-    if part == "recording":
+    if part == "recording" and PREVIEW_ROOT is not None:
         for side in ("left", "right"):
             try:
                 (PREVIEW_ROOT / f"{side}.jpg").unlink(missing_ok=True)
@@ -589,6 +658,69 @@ def start_devices(payload):
         return _start_collection(payload, "devices")
     finally:
         START_LOCK.release()
+
+
+def update_hotkey_settings(payload):
+    with START_LOCK, STATE_LOCK:
+        if DEVICES is not None:
+            DEVICES["recording_payload"] = dict(payload)
+    return {"saved": True}
+
+
+def handle_controller_button(packet):
+    global HOTKEY_AFTER_NS, HOTKEY_STATUS
+    now = time.monotonic_ns()
+    if not isinstance(packet, dict) or packet.get("button") not in ("X", "Y"):
+        return
+    stamp = packet.get("at_ns")
+    if type(stamp) is not int or not 0 <= now - stamp <= 500_000_000:
+        return
+    if not START_LOCK.acquire(blocking=False):
+        return  # Discard commands during a UI transition, never queue them for later.
+    try:
+        if stamp <= HOTKEY_AFTER_NS or not DEVICES or packet.get("token") != DEVICES.get("hotkey_token"):
+            return
+        if not devices_active(ready=True):
+            return
+        HOTKEY_AFTER_NS = now
+        current = collection_status()
+        if current["active"] and current["status"] != "running":
+            raise ApiError(HTTPStatus.CONFLICT, "正在启动或保存，本次按键已忽略")
+        if packet["button"] == "X":
+            if current["active"]:
+                _stop_collection()
+                message = "X：正在结束录制并保存"
+            else:
+                _start_collection(dict(DEVICES["recording_payload"]), "recording")
+                message = "X：正在开始录制"
+        else:
+            if current["active"]:
+                raise ApiError(HTTPStatus.CONFLICT, "Y：请先结束录制并等待保存完成")
+            if not current.get("episode_exists"):
+                raise ApiError(HTTPStatus.CONFLICT, "Y：本次 UI 运行中没有可删除的上一段录制")
+            destination = move_episode_to_trash(DATASET_ROOT, current["episode_id"], session=current["session"])
+            message = f"Y：{current['episode_id']} 已移到回收站，可恢复：{destination}"
+        HOTKEY_STATUS = {"at_ns": now, "message": message, "error": False}
+    except (ApiError, OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        message = error.message if isinstance(error, ApiError) else str(error)
+        HOTKEY_STATUS = {"at_ns": now, "message": message, "error": True}
+        print_status_error("手柄数采", message)
+    finally:
+        HOTKEY_AFTER_NS = time.monotonic_ns()
+        START_LOCK.release()
+
+
+def listen_controller_buttons(channel, stopped):
+    channel.settimeout(0.2)
+    while not stopped.is_set():
+        try:
+            packet = channel.recv(1024)
+        except socket.timeout:
+            continue
+        try:
+            handle_controller_button(json.loads(packet))
+        except (ValueError, UnicodeError):
+            continue
 
 
 def request_robot_reset():
@@ -642,7 +774,7 @@ def request_robot_reset():
 
 
 def _start_collection(payload, part):
-    global COLLECTION, DEVICES
+    global COLLECTION, DEVICES, HOTKEY_AFTER_NS
     if RESET_LOCK.locked():
         raise ApiError(HTTPStatus.CONFLICT, "机器人正在复位")
     if part == "devices" and devices_active():
@@ -659,19 +791,34 @@ def _start_collection(payload, part):
                 raise ApiError(HTTPStatus.BAD_REQUEST, "必须逐项完成现场安全确认")
     task = str(payload.get("task", "")).strip()
     operator = str(payload.get("operator", "")).strip()
-    robot = str(payload.get("robot_model", "")).strip()
+    robot = str(payload.get("robot_model", COLLECTION_SETTINGS["robot"]["model"])).strip()
     if not task or len(task) > 80 or not operator or len(operator) > 80 or not robot or len(robot) > 100:
         raise ApiError(HTTPStatus.BAD_REQUEST, "任务、采集员或机器人型号无效")
+    selected_session, episode_id, episode_directory = None, None, None
+    if part == "recording":
+        selected_session = payload.get("session") or f"session_{time.strftime('%Y-%m-%d')}"
+        directory = session_path(DATASET_ROOT, selected_session)
+        if payload.get("session") and not directory.is_dir():
+            raise ApiError(HTTPStatus.BAD_REQUEST, "指定的 Session 不存在")
+        directory.mkdir(parents=True, exist_ok=True)
+        episode_id = new_episode_id()
+        episode_directory = directory / episode_id
     if not all(path.exists() for path in (COLLECTION_SCRIPT, DAS_CONFIG, DAS_SDK_ROOT, SCALE_CALIBRATION)):
         raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "采集脚本、DAS SDK 或标定文件缺失")
-    resolution = str(payload.get("camera_resolution", "640x480"))
+    resolution = payload.get("camera_resolution")
     try:
-        fps = int(payload.get("camera_fps", 60))
+        fps = int(payload["camera_fps"]) if "camera_fps" in payload else None
     except (TypeError, ValueError) as error:
         raise ApiError(HTTPStatus.BAD_REQUEST, "相机帧率无效") from error
-    if resolution not in KNOWN_CAMERA_FORMATS or fps not in KNOWN_CAMERA_FORMATS[resolution]:
-        raise ApiError(HTTPStatus.BAD_REQUEST, "相机分辨率与帧率组合不受支持")
+    no_vision = payload.get("no_vision", not COLLECTION_SETTINGS["capture"]["vision_enabled"])
+    for field in ("no_vision", "nsp_lateral"):
+        if field in payload and type(payload[field]) is not bool:
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"{field} 必须是布尔值")
     environment = teleop_environment().copy()
+    hotkey_token = secrets.token_hex(16) if part == "devices" else None
+    if part == "devices" and HOTKEY_SOCKET_PATH:
+        environment["FIELDNOTE_HOTKEY_SOCKET"] = HOTKEY_SOCKET_PATH
+        environment["FIELDNOTE_HOTKEY_TOKEN"] = hotkey_token
     if part == "devices" and process_running("publish_pico.py"):
         raise ApiError(HTTPStatus.CONFLICT, "外部 PICO 发布器仍在运行，请先停止以避免设备冲突")
     temporary = tempfile.NamedTemporaryFile(prefix="fieldnote-das-", suffix=".json", delete=False)
@@ -683,7 +830,7 @@ def _start_collection(payload, part):
         config_path.unlink(missing_ok=True)
         raise
     preview_root = None
-    if part == "recording" and payload.get("no_vision") is not True:
+    if part == "recording" and not no_vision and COLLECTION_SETTINGS["preview"]["enabled"]:
         try:
             PREVIEW_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
             if not PREVIEW_ROOT.is_symlink():
@@ -696,6 +843,7 @@ def _start_collection(payload, part):
     command = [
         str(TELEOP_PYTHON if TELEOP_PYTHON.is_file() else Path(sys.executable)), str(COLLECTION_SCRIPT),
         "--part", part,
+        "--config", str(COLLECTION_CONFIG_PATH), "--output-root", str(DATASET_ROOT),
         "--task", task, "--operator", operator, "--robot-model", robot,
         "--enable-hardware", "--confirmed-estop", "--confirmed-joint-mapping",
         "--das-config", str(config_path), "--das-sdk-root", str(DAS_SDK_ROOT),
@@ -704,9 +852,11 @@ def _start_collection(payload, part):
     ready_file = config_path.with_suffix(".ready")
     ready_file.unlink(missing_ok=True)
     command += ["--ready-file", str(ready_file)]
+    if part == "recording":
+        command += ["--session", selected_session, "--episode-id", episode_id]
     if preview_root is not None:
         command += ["--preview-root", str(preview_root)]
-    duration = payload.get("max_duration")
+    duration = payload.get("max_duration", COLLECTION_SETTINGS["capture"]["max_duration_s"])
     if part == "recording" and duration not in (None, ""):
         try:
             duration = float(duration)
@@ -717,10 +867,11 @@ def _start_collection(payload, part):
             config_path.unlink(missing_ok=True)
             raise ApiError(HTTPStatus.BAD_REQUEST, "最长时长必须在 0 到 24 小时内")
         command += ["--max-duration", str(duration)]
-    if payload.get("no_vision") is True:
-        command.append("--no-vision")
-    if part == "devices" and payload.get("nsp_lateral") is True:
-        command.append("--nsp-lateral")
+    elif part == "recording" and "max_duration" in payload:
+        command.append("--unlimited-duration")
+    command.append("--no-vision" if no_vision else "--vision")
+    if "nsp_lateral" in payload:
+        command.append("--nsp-lateral" if payload["nsp_lateral"] else "--no-nsp-lateral")
     log_path = PROJECT_ROOT / "logs" / f"ui_{part}_{datetime.now():%Y%m%d_%H%M%S}.log"
     log_path.parent.mkdir(exist_ok=True)
     with log_path.open("ab", buffering=0) as log:
@@ -739,19 +890,26 @@ def _start_collection(payload, part):
             raise
     job = {
         "process": process,
+        "hotkey_token": hotkey_token,
+        "recording_payload": dict(payload),
+        "session": selected_session,
+        "episode_id": episode_id,
+        "episode_path": str(episode_directory) if episode_directory is not None else None,
         "task": task,
         "status": "starting",
         "started_at": time.time(),
         "log": log_path,
         "ready_file": ready_file,
-        "vision_enabled": payload.get("no_vision") is not True,
+        "vision_enabled": not no_vision,
         "max_duration": duration,
     }
     with STATE_LOCK:
         if part == "recording":
             COLLECTION = job
+            DEVICES["recording_payload"] = dict(payload)
         else:
             DEVICES = job
+        HOTKEY_AFTER_NS = time.monotonic_ns()
     print_status_error("录制" if part == "recording" else "设备", None)
     threading.Thread(
         target=_watch_job,
@@ -762,11 +920,21 @@ def _start_collection(payload, part):
 
 
 def stop_collection():
+    with START_LOCK:
+        return _stop_collection()
+
+
+def _stop_collection():
+    global HOTKEY_AFTER_NS
     with STATE_LOCK:
         job = COLLECTION
         if not job or job["process"].poll() is not None:
             raise ApiError(HTTPStatus.CONFLICT, "当前没有活动采集")
+        status = _job_status(job)
+        if status["status"] in ("stopping", "saving"):
+            return status
         job["status"] = "stopping"
+        HOTKEY_AFTER_NS = time.monotonic_ns()
         process = job["process"]
     try:
         os.killpg(process.pid, signal.SIGINT)
@@ -776,6 +944,11 @@ def stop_collection():
 
 
 def stop_devices():
+    with START_LOCK:
+        return _stop_devices()
+
+
+def _stop_devices():
     if collection_active():
         raise ApiError(HTTPStatus.CONFLICT, "请先停止录制并等待保存完成")
     with STATE_LOCK:
@@ -856,7 +1029,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def send_preview(self, side):
         try:
-            body = (PREVIEW_ROOT / f"{side}.jpg").read_bytes()
+            body = (PREVIEW_ROOT / f"{side}.jpg").read_bytes() if PREVIEW_ROOT is not None else b""
         except OSError:
             body = b""
         if len(body) < 4 or not body.startswith(b"\xff\xd8") or not body.endswith(b"\xff\xd9"):
@@ -871,11 +1044,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_mcap_export(self, episode_ids):
-        files = mcap_export_files(DATASET_ROOT, episode_ids)
-        if len(files) != 1:
-            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "Episode 必须只有一个最终 MCAP")
-        _episode_id, path = files[0]
+    def send_mcap_export(self, episode_ids, variant="h264"):
+        _episode_id, path = mcap_export_files(DATASET_ROOT, episode_ids, variant)[0]
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
@@ -896,7 +1066,10 @@ class Handler(SimpleHTTPRequestHandler):
         if length > 65_536:
             raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "请求体过大")
         try:
-            return json.loads(self.rfile.read(length) or b"{}")
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "JSON 请求体必须是对象")
+            return body
         except json.JSONDecodeError as error:
             raise ApiError(HTTPStatus.BAD_REQUEST, "JSON 请求体无效") from error
 
@@ -906,23 +1079,39 @@ class Handler(SimpleHTTPRequestHandler):
         except ApiError as error:
             print_status_error(f"API {self.command} {urlsplit(self.path).path}", error.message)
             self.send_json({"error": error.message}, error.status)
+        except (ValueError, RuntimeError) as error:
+            self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST if isinstance(error, ValueError) else HTTPStatus.CONFLICT)
+        except FileNotFoundError as error:
+            self.send_json({"error": str(error)}, HTTPStatus.NOT_FOUND)
         except (OSError, subprocess.SubprocessError) as error:
             print_status_error(f"API {self.command} {urlsplit(self.path).path}", str(error))
             self.send_json({"error": str(error)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def do_GET(self):
         request = urlsplit(self.path)
+        if request.path == "/api/sessions":
+            return self.handle_api(lambda: self.send_json({"sessions": [
+                session_record(session_path(DATASET_ROOT, p.name))
+                for p in sorted(DATASET_ROOT.glob("session_*"), reverse=True)
+                if p.is_dir() and not p.is_symlink() and SESSION_ID.fullmatch(p.name)
+            ]}))
+        if request.path == "/api/collection/config":
+            return self.handle_api(lambda: self.send_json({
+                "robot": COLLECTION_SETTINGS["robot"], "capture": COLLECTION_SETTINGS["capture"],
+                "preview": COLLECTION_SETTINGS["preview"], "cameras": read_json(DAS_CONFIG),
+            }))
         preview = re.fullmatch(r"/api/preview/(left|right)\.jpg", request.path)
         if preview:
             return self.send_preview(preview.group(1))
         if request.path == "/api/exports/mcap":
             query = parse_qs(request.query)
-            return self.handle_api(lambda: self.send_mcap_export(query.get("episode", [])))
+            return self.handle_api(lambda: self.send_mcap_export(query.get("episode", []), query.get("format", ["h264"])[0]))
         if request.path == "/api/status":
             usage = shutil.disk_usage(DATASET_ROOT if DATASET_ROOT.exists() else PROJECT_ROOT)
             return self.send_json({
                 "devices": device_status(),
                 "collection": collection_status(),
+                "hotkeys": HOTKEY_STATUS,
                 "disk_free_bytes": usage.free,
             })
         if request.path == "/api/devices/pico":
@@ -944,6 +1133,26 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path == "/api/exports/mcap":
+            return self.handle_api(lambda: self.send_json(prepare_mcap_export(self.read_body())))
+        if path == "/api/collection/hotkeys":
+            return self.handle_api(lambda: self.send_json(update_hotkey_settings(self.read_body())))
+        session_match = re.fullmatch(r"/api/sessions/(session_[A-Za-z0-9_-]{1,100})/rename", path)
+        if path == "/api/sessions" or session_match:
+            return self.handle_api(lambda: self.send_json(save_session(
+                DATASET_ROOT, self.read_body().get("name"), session_match.group(1) if session_match else None,
+            )))
+        review_match = re.fullmatch(r"/api/episodes/(episode_\d{6}_[0-9a-f]{8})/review", path)
+        if review_match:
+            def review():
+                body = self.read_body()
+                with START_LOCK:
+                    current = collection_status()
+                    if current["active"] and current.get("episode_id") == review_match.group(1):
+                        raise ApiError(HTTPStatus.CONFLICT, "本段仍在录制或保存，请等待结束")
+                    saved = save_review(DATASET_ROOT, body.get("session"), review_match.group(1), body.get("result"))
+                self.send_json(saved)
+            return self.handle_api(review)
         open_match = re.fullmatch(r"/api/episodes/(episode_\d{6}_[0-9a-f]{8})/open", path)
         if open_match:
             return self.handle_api(lambda: self.send_json(
@@ -1038,7 +1247,24 @@ def self_test():
         (blocked / "data" / "data_0.mcap").write_bytes(b"mcap")
         assert episode_record(blocked)["session"] == "session_2026-09-03"
         assert episode_record(blocked)["size_bytes"] == 4
-        assert mcap_export_files(root, [blocked.name]) == [(blocked.name, blocked / "data" / "data_0.mcap")]
+        (blocked / "final").mkdir()
+        mjpeg = blocked / "final" / f"{blocked.name}.mjpeg.mcap"
+        mjpeg.write_bytes(b"mjpeg")
+        try:
+            mcap_export_files(root, [blocked.name])
+            raise AssertionError("raw/MJPEG MCAP was exported without H264")
+        except ApiError as error:
+            assert error.status == HTTPStatus.UNPROCESSABLE_ENTITY
+        h264 = blocked / "final" / f"{blocked.name}.h264.mcap"
+        h264.symlink_to(mjpeg)
+        try:
+            mcap_export_files(root, [blocked.name])
+            raise AssertionError("symlink H264 export was accepted")
+        except ApiError as error:
+            assert error.status == HTTPStatus.BAD_REQUEST
+        h264.unlink()
+        h264.write_bytes(b"h264")
+        assert mcap_export_files(root, [blocked.name]) == [(blocked.name, h264)]
         packaged_mcap = root / "session_2026-09-03" / "data/chunk-000/episode_000000.mcap"
         packaged_mcap.parent.mkdir(parents=True)
         packaged_meta = Path(temporary) / "meta.json"
@@ -1053,9 +1279,11 @@ def self_test():
             ("meta/meta.json", "application/json", packaged_meta),
             ("data/data.parquet", "application/vnd.apache.parquet", packaged_data),
         ))
-        assert mcap_export_files(root, ["episode_120002_01234567"]) == [
-            ("episode_120002_01234567", packaged_mcap)
-        ]
+        try:
+            mcap_export_files(root, ["episode_120002_01234567"])
+            raise AssertionError("legacy attachment MCAP was exported as H264")
+        except ApiError as error:
+            assert error.status == HTTPStatus.UNPROCESSABLE_ENTITY
         assert episode_record(packaged_mcap)["size_bytes"] == packaged_mcap.stat().st_size
         try:
             mcap_export_files(root, [episode.name, blocked.name])
@@ -1087,24 +1315,55 @@ def self_test():
         failure_log = Path(temporary) / "collection.log"
         failure_log.write_text("Traceback\nModuleNotFoundError: missing driver\n", encoding="utf-8")
         assert collection_exit_error(failure_log, 1).endswith("ModuleNotFoundError: missing driver")
+        duplicate_metadata = read_json(packaged_meta)
+        duplicate_metadata["episode_id"] = blocked.name
+        packaged_meta.write_text(json.dumps(duplicate_metadata), encoding="utf-8")
+        write_episode_mcap(packaged_mcap.parent / "episode_000001.mcap", (
+            ("meta/meta.json", "application/json", packaged_meta),
+            ("data/data.parquet", "application/vnd.apache.parquet", packaged_data),
+        ))
+        assert mcap_export_files(root, [blocked.name]) == [(blocked.name, h264)]
     print("Server self-check passed")
 
 
 def main():
+    global COLLECTION_CONFIG_PATH, COLLECTION_SETTINGS, DATASET_ROOT, MARVIN_IP, PREVIEW_ROOT, DAS_CONFIG, DAS_SDK_ROOT, SCALE_CALIBRATION
+    global HOTKEY_SOCKET_PATH
     parser = argparse.ArgumentParser(description="Serve the Fieldnote data collection console")
+    parser.add_argument("--collection-config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=4173)
     parser.add_argument("--self-test", action="store_true")
     arguments = parser.parse_args()
+    COLLECTION_CONFIG_PATH = arguments.collection_config.expanduser().resolve()
+    COLLECTION_SETTINGS = validate_config(load_config(COLLECTION_CONFIG_PATH))
+    DATASET_ROOT = Path(COLLECTION_SETTINGS["paths"]["output_root"])
+    MARVIN_IP = COLLECTION_SETTINGS["robot"]["ip"]
+    PREVIEW_ROOT = Path(COLLECTION_SETTINGS["preview"]["root"]) if COLLECTION_SETTINGS["preview"]["root"] else None
+    DAS_CONFIG = Path(COLLECTION_SETTINGS["paths"]["das_config"])
+    DAS_SDK_ROOT = Path(COLLECTION_SETTINGS["paths"]["das_sdk_root"])
+    SCALE_CALIBRATION = Path(COLLECTION_SETTINGS["paths"]["scale_calibration"])
     if arguments.self_test:
         return self_test()
     server = ThreadingHTTPServer((arguments.host, arguments.port), Handler)
+    hotkey_directory = tempfile.TemporaryDirectory(prefix="fieldnote-keys-")
+    HOTKEY_SOCKET_PATH = str(Path(hotkey_directory.name) / "buttons.sock")
+    channel = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    channel.bind(HOTKEY_SOCKET_PATH)
+    os.chmod(HOTKEY_SOCKET_PATH, 0o600)
+    stopped = threading.Event()
+    listener = threading.Thread(target=listen_controller_buttons, args=(channel, stopped), daemon=True)
+    listener.start()
     print(f"Fieldnote: http://{arguments.host}:{arguments.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopping Fieldnote...")
     finally:
+        stopped.set()
+        listener.join()
+        channel.close()
+        hotkey_directory.cleanup()
         server.server_close()
         if collection_active():
             stop_collection()

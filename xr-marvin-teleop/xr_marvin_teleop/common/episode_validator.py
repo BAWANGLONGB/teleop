@@ -5,10 +5,13 @@ import json
 import time
 from pathlib import Path
 
+from .collection_config import write_json
 
-def _sha256(path):
+
+def sha256_file(path):
+    """Hash large recordings without loading them into memory."""
     digest = hashlib.sha256()
-    with path.open("rb") as source:
+    with Path(path).open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -209,7 +212,7 @@ def validate_episode(
     files = {
         str(path.relative_to(episode_directory)): {
             "size_bytes": path.stat().st_size,
-            "sha256": _sha256(path),
+            "sha256": sha256_file(path),
         }
         for path in sorted(episode_directory.rglob("*"))
         if path.is_file() and path.name != "manifest.json"
@@ -224,9 +227,5 @@ def validate_episode(
         "bags": bags,
         "files": files,
     }
-    temporary_path = episode_directory / "manifest.json.tmp"
-    temporary_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    temporary_path.replace(episode_directory / "manifest.json")
+    write_json(episode_directory / "manifest.json", manifest)
     return manifest

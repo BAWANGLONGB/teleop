@@ -1,37 +1,17 @@
 """Named Marvin joint postures in SDK arm A/B order."""
 
 import numpy as np
-"""
-    J2>=-90,
-    J4 <= 0,
-"""
+
+
+# B-button return target, in SDK order [A1..A7, B1..B7]; not a startup command.
 MARVIN_INITIAL_POSE_Q_DEG = np.array(
     [
-        122, -60, -87, -115, 88, -10, 15.313,
-        -122, -60, 87, -115, -88, -10, -15.313,
+        122, -60, -87, -115, 69.074, -14.412, 11.273,
+        -122, -60, 87, -115, -69.074, -14.412, -11.273,
     ],
     dtype=float,
 )
 
-# MARVIN_INITIAL_POSE_Q_DEG = np.array(
-#     [
-#         90.0,
-#         -90.0,
-#         -90.0,
-#         -20.0,
-#         90.0,
-#         0.0,
-#         0.0,
-#         -90.0,
-#         -90.0,
-#         90.0,
-#         -20.0,
-#         -90.0,
-#         0.0,
-#         0.0,
-#     ],
-#     dtype=float,
-# )
 MARVIN_INITIAL_POSE_Q_RAD = np.deg2rad(MARVIN_INITIAL_POSE_Q_DEG)
 MARVIN_INITIAL_POSE_Q_DEG.setflags(write=False)
 MARVIN_INITIAL_POSE_Q_RAD.setflags(write=False)
