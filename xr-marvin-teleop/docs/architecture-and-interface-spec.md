@@ -268,9 +268,9 @@ close() -> None
 
 左右 Grip 独立控制两臂；一臂重新抓取只取消该臂回位，另一臂可继续回位。
 
-夹爪使用独立的归一化闭合度，`0` 为全开、`1` 为全闭。Trigger 和摇杆后拉取
-较大值增量闭合，摇杆前推增量打开，输入回中后保持；Trigger 与前推冲突时闭合
-优先。计算跟随主控制周期，位置目标最多按 `20 Hz` 下发。Marvin Modbus 后端直接
+夹爪使用独立的归一化闭合度，`0` 为全开、`1` 为全闭。默认 `binary` 模式下，Trigger
+或摇杆后拉选择全闭，摇杆前推选择全开；开闭及 B 键闭合均以 `gripper_rate` 对称限速（默认每秒一个全行程），回中后继续到所选端点。`continuous` 模式保留原有增量控制，回中后保持，
+Trigger 与前推冲突时闭合优先。计算跟随主控制周期，位置目标最多按 `20 Hz` 下发。Marvin Modbus 后端直接
 发送寄存器帧；DAS 后端通过 `DASFingerAdapter` 将闭合度转换为标定的开口距离，并
 在独立工作线程中调用官方 Python SDK，避免阻塞机械臂控制循环。XR stale 和程序
 退出都保持最后目标，不自动开爪。
@@ -375,7 +375,7 @@ XR stale 保持周期仍写日志，但 XR 字段为 `null`。回放读取器忽
 采集不再把不同频率的数据拼成 `/teleop/sample`。各数据源按自身节拍发布：
 
 ```text
-PICO SDK 独立进程     → /raw/pico/frame → 实机控制订阅
+PICO SDK 独立进程     → /raw/pico/poses → 实机控制订阅
 Marvin SDK 回调/轮询   → /raw/marvin/joint_state
 控制实际下发          → /command/marvin/joint_target、/command/das/target
 左右 DAS 串口独立进程  → /raw/das/{side}/state、tactile
@@ -388,9 +388,10 @@ Marvin SDK 回调/轮询   → /raw/marvin/joint_state
                    final/*.mjpeg.mcap + final/*.h264.mcap
 ```
 
-每个消息流包含独立 `sequence_id`。`header.stamp` 记录采集机墙钟，
+消息协议已切换为 [ROS2 / Foxglove v2](ros2-message-v2.md)。每个消息流的独立 `sequence_id`
+以及有效性、设备状态、其他时钟保存在同采样时间的 `/status` DiagnosticArray 中。`header.stamp` 记录采集机墙钟，
 `receive_steady_ns` 记录接收点单调时钟；只有设备提供原始时钟时才填写
-`source_timestamp_ns`，否则为 `0`。后处理使用 `header.stamp`（相机为 `image.header.stamp`）；
+`source_timestamp_ns`，否则为 `0`。后处理使用 `header.stamp`（Grid 使用 `timestamp`）；
 无 header 的 Episode 消息使用 `wall_time_ns`，其余消息回退到原始 bag 时间。
 多发布者 `/diagnostics` 固定使用 bag 时间。当前不估计单调时钟偏移、不扣除相机延迟；
 系统时间回退保留并交给校验报告，序号用于检测丢帧，在线控制线程不等待同步。
@@ -398,9 +399,9 @@ Marvin SDK 回调/轮询   → /raw/marvin/joint_state
 控制状态、命令、编码器、触觉和诊断写入 `state/`；左右相机分别在独立进程中把
 V4L2 原生 MJPEG 写入 `vision_left/`、`vision_right/`，不经过解码、重编码和 DDS。
 录制结束只关闭原始文件并标记 `export_status=pending`。设备停止后，
-`scripts/data/postprocess_episode.py` 合并数据到 `data/`，由关节反馈/目标计算左右 TCP xyz+rpy，
+`scripts/data/postprocess_episode.py` 合并数据到 `data/`，按关节名读取反馈/目标并计算左右 TCP PoseStamped（xyz+xyzw），
 校验通过后离线生成所选最终格式。每个文件包含完整状态、命令、触觉、TCP 和双路图像；
-状态沿用 ROS2 CDR，图像分别使用 Foxglove CompressedImage / CompressedVideo Protobuf。
+状态沿用 ROS2 CDR，MJPEG 使用 sensor_msgs/CompressedImage，H.264 使用 Foxglove CompressedVideo Protobuf。
 `meta/meta.json`、标定和采集配置快照作为附件内嵌。完成 CRC 和消息数量检查后，整组文件
 原子发布到 `final/`；已有输出不覆盖，原始 Episode 不自动删除。
 

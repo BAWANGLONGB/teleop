@@ -10,7 +10,9 @@
   },
   "robot": {
     "model": "Marvin", "ip": "192.168.1.190",
-    "thumbstick_y_sign": 1, "scale_factor": null,
+    "thumbstick_y_sign": 1,
+    "gripper_mode": "binary",
+    "scale_factor": 1.2,
     "nsp_lateral": false, "nsp_max_angle": 5.0, "nsp_angle_rate": 20.0,
     "nsp_lateral_deadzone": 0.03, "nsp_lateral_range": 0.12,
     "nsp_lateral_sign_left": 1, "nsp_lateral_sign_right": 1
@@ -23,8 +25,12 @@
     "processed_storage": "data_collection/mcap_vision.yaml",
     "qos": "data_collection/qos_overrides.yaml",
     "state_topics": [
-      "/raw/pico/frame", "/raw/marvin/joint_state", "/command/marvin/joint_target",
+      "/raw/pico/poses", "/raw/pico/joy", "/raw/pico/status",
+      "/raw/marvin/joint_state", "/raw/marvin/joint_state/status",
+      "/command/marvin/joint_target", "/command/marvin/joint_target/status",
       "/command/das/target", "/raw/das/left/state", "/raw/das/right/state",
+      "/command/das/target/status", "/raw/das/left/state/status", "/raw/das/right/state/status",
+      "/raw/das/left/tactile/status", "/raw/das/right/tactile/status",
       "/raw/das/left/tactile", "/raw/das/right/tactile", "/diagnostics",
       "/episode/state", "/episode/event"
     ]
@@ -44,7 +50,7 @@
     "export_nice": 10
   },
   "export": {
-    "mjpeg": true, "h264": true, "h264_crf": 23,
-    "h264_preset": "veryfast", "h264_keyint": 30, "h264_threads": 2
+    "mjpeg": true, "h264": true, "h264_crf": 18,
+    "h264_preset": "veryfast", "h264_keyint": 10, "h264_threads": 2
   }
 }

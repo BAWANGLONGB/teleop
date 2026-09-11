@@ -1,4 +1,14 @@
-/raw/pico/frame:
+/raw/pico/poses:
+  history: keep_last
+  depth: 10
+  reliability: best_effort
+  durability: volatile
+/raw/pico/joy:
+  history: keep_last
+  depth: 10
+  reliability: best_effort
+  durability: volatile
+/raw/pico/status:
   history: keep_last
   depth: 10
   reliability: best_effort
@@ -9,6 +19,16 @@
   reliability: best_effort
   durability: volatile
 /raw/das/right/tactile:
+  history: keep_last
+  depth: 10
+  reliability: best_effort
+  durability: volatile
+/raw/das/left/tactile/status:
+  history: keep_last
+  depth: 10
+  reliability: best_effort
+  durability: volatile
+/raw/das/right/tactile/status:
   history: keep_last
   depth: 10
   reliability: best_effort

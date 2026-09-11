@@ -3,12 +3,17 @@
 import math
 import threading
 import time
+import uuid
+from . import spin_until_stopped
+from .protocol import (GRIPPER_NAMES, SampleJoiner, joint_positions, trajectory,
+                       sample_status, stamp_ns)
 
 from xr_marvin_teleop.hardware.interface.das_finger import (
     ARM_NAMES,
     DASFingerConfiguration,
     closedness_to_das_distances,
     das_distances_to_closedness,
+    MIN_DAS_DISTANCE_M, MAX_DAS_DISTANCE_M,
 )
 
 
@@ -38,10 +43,12 @@ class RosDasClient:
                 QoSProfile,
                 ReliabilityPolicy,
             )
-            from teleop_msgs.msg import DasState, GripperCommand
+            from sensor_msgs.msg import JointState
+            from trajectory_msgs.msg import JointTrajectory
+            from diagnostic_msgs.msg import DiagnosticArray
         except (ImportError, OSError) as error:
             raise RuntimeError(
-                "RosDasClient requires sourced ROS2 and teleop_msgs"
+                "RosDasClient requires sourced ROS2"
             ) from error
 
         critical_qos = QoSProfile(
@@ -56,7 +63,7 @@ class RosDasClient:
             encoder_stale_timeout_seconds
         )
         self._rclpy = rclpy
-        self._message_type = GripperCommand
+        self._session = uuid.uuid4().hex
         self._owns_context = not rclpy.ok()
         if self._owns_context:
             rclpy.init()
@@ -81,16 +88,21 @@ class RosDasClient:
         self._update_ids = [0, 0]
         self._command_sequence = 0
         self._publisher = self._node.create_publisher(
-            GripperCommand, "/command/das/target", critical_qos
+            JointTrajectory, "/command/das/target", critical_qos
         )
+        self._status_publisher = self._node.create_publisher(
+            DiagnosticArray, "/command/das/target/status", critical_qos)
+        self._joiners = [SampleJoiner([f"/raw/das/{side}/state"], int(encoder_stale_timeout_seconds * 1e9))
+                         for side in ARM_NAMES]
         self._subscriptions = tuple(
             self._node.create_subscription(
-                DasState,
-                f"/raw/das/{side}/state",
-                self._callback,
+                message_type,
+                f"/raw/das/{side}/state" + suffix,
+                lambda message, index=index, suffix=suffix: self._callback(index, suffix, message),
                 critical_qos,
             )
-            for side in ARM_NAMES
+            for index, side in enumerate(ARM_NAMES)
+            for message_type, suffix in ((JointState, ""), (DiagnosticArray, "/status"))
         )
         self._stop_event = threading.Event()
         self._thread = threading.Thread(
@@ -100,37 +112,40 @@ class RosDasClient:
         self._is_released = False
         self._thread.start()
 
-    def _callback(self, message):
+    def _callback(self, arm_index, suffix, message):
+        topic = f"/raw/das/{ARM_NAMES[arm_index]}/state"
         try:
-            arm_index = ARM_NAMES.index(message.side)
-        except ValueError:
+            joined = self._joiners[arm_index].push("status" if suffix else topic, message)
+            if joined is None:
+                return
+            parts, values, received = joined
+            distance = (joint_positions(parts[topic], [GRIPPER_NAMES[arm_index]])[0]
+                        if values["valid"] else math.nan)
+            if values["valid"]:
+                if not MIN_DAS_DISTANCE_M <= distance <= MAX_DAS_DISTANCE_M:
+                    raise ValueError("DAS feedback outside physical limits")
+            target = float(values["target_distance_m"])
+            flags = int(values["status_flags"])
+            if not MIN_DAS_DISTANCE_M <= target <= MAX_DAS_DISTANCE_M or not 0 <= flags <= 0xFFFFFFFF:
+                raise ValueError("invalid DAS feedback diagnostics")
+        except (ValueError, TypeError, KeyError, AttributeError):
+            with self._condition:
+                self._valid[arm_index] = False
+                self._condition.notify_all()
             return
         with self._condition:
-            sequence_id = int(message.sequence_id)
-            previous_sequence = self._sequence_ids[arm_index]
-            if sequence_id <= previous_sequence:
-                if sequence_id != 1 or previous_sequence <= 1:
-                    return
-            self._sequence_ids[arm_index] = sequence_id
-            self._distances[arm_index] = float(message.distance_m)
-            self._targets[arm_index] = float(message.target_distance_m)
-            self._encoder_monotonic_ns[arm_index] = int(
-                message.receive_steady_ns
-            )
-            self._encoder_wall_time_ns[arm_index] = (
-                int(message.header.stamp.sec) * 1_000_000_000
-                + int(message.header.stamp.nanosec)
-            )
-            self._status_flags[arm_index] = int(message.status_flags)
-            self._valid[arm_index] = bool(message.valid) and math.isfinite(
-                self._distances[arm_index]
-            )
+            self._sequence_ids[arm_index] = values["sequence_id"]
+            self._distances[arm_index] = distance
+            self._targets[arm_index] = target
+            self._encoder_monotonic_ns[arm_index] = received
+            self._encoder_wall_time_ns[arm_index] = stamp_ns(parts["status"])
+            self._status_flags[arm_index] = flags
+            self._valid[arm_index] = values["valid"] and math.isfinite(distance) and not flags
             self._update_ids[arm_index] += 1
             self._condition.notify_all()
 
     def _spin(self):
-        while not self._stop_event.is_set():
-            self._executor.spin_once(timeout_sec=0.02)
+        spin_until_stopped(self._executor, self._node.context, self._stop_event)
 
     def connect(self, timeout_seconds=None):
         if self._is_connected:
@@ -201,16 +216,12 @@ class RosDasClient:
         targets = closedness_to_das_distances(closedness, self.configurations)
         wall_time_ns = time.time_ns()
         steady_ns = time.monotonic_ns()
-        message = self._message_type()
-        message.header.stamp.sec, message.header.stamp.nanosec = divmod(
-            wall_time_ns, 1_000_000_000
-        )
-        message.header.frame_id = "finger_pair"
+        message = trajectory([1.0 - value for value in closedness], GRIPPER_NAMES, wall_time_ns)
         self._command_sequence += 1
-        message.sequence_id = self._command_sequence
-        message.issue_steady_ns = steady_ns
-        message.closedness = list(closedness)
         self._publisher.publish(message)
+        self._status_publisher.publish(sample_status(
+            ["/command/das/target"], wall_time_ns, self._session, self._command_sequence,
+            steady_ns, command=True))
         with self._condition:
             self._targets[:] = targets
         return targets

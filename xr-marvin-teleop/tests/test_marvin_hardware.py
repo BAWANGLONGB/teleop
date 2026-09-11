@@ -608,6 +608,7 @@ class TestMarvinHardware(unittest.TestCase):
             telemetry_publisher=telemetry,
             gripper_control_enabled=True,
             initial_gripper_closedness=(0.5, 0.5),
+            gripper_mode="continuous",
             gripper_rate=1.0,
             gripper_command_hz=20.0,
         )
@@ -629,6 +630,45 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertEqual(event_names.count("joint_command"), 8)
         self.assertIn("gripper_command", event_names)
         self.assertTrue(telemetry.closed)
+
+        binary_adapter = FakeMarvinSdkAdapter()
+        binary_controller = MarvinHardwareTeleopController(
+            xr_client=FakeXRClient([]),
+            adapter=binary_adapter,
+            kinematics=FakeMarvinVendorKinematics(),
+            scale_calibration_path=Path("unused.json"),
+            requested_scale_factor=1.0,
+            gripper_control_enabled=True,
+            initial_gripper_closedness=(0.5, 0.5),
+        )
+        binary_controller._update_gripper_command(snapshot(9), 0.0)
+        binary_controller._update_gripper_command(snapshot(10, trigger=0.1), 0.1)
+        self.assertAlmostEqual(binary_controller.gripper_closedness[0], 0.54)
+        binary_controller._update_gripper_command(snapshot(11, stick_y=0.3), 0.2)
+        self.assertAlmostEqual(binary_controller.gripper_closedness[0], 0.5)
+        # Neutral keeps the binary endpoint selected; the output still ramps.
+        for index in range(1, 14):
+            binary_controller._update_gripper_command(
+                snapshot(12), 0.2 + index * 0.1
+            )
+        self.assertEqual(binary_adapter.gripper_commands[-1], (0.0, 0.5))
+        binary_controller._update_gripper_command(
+            snapshot(13, stick_y=1.0), 1.6, reset_requested=True
+        )
+        np.testing.assert_allclose(binary_controller.gripper_closedness, (0.04, 0.54))
+        for index in range(1, 25):
+            binary_controller._update_gripper_command(
+                snapshot(14), 1.6 + index * 0.1
+            )
+        self.assertEqual(binary_adapter.gripper_commands[-1], (1.0, 1.0))
+        # Slow ramps and their final sub-deadband step must reach the adapter.
+        binary_controller.gripper_rate = 0.1
+        binary_controller._gripper_closedness[:] = (0.005, 1.0)
+        binary_controller._last_sent_gripper_closedness[:] = (0.005, 1.0)
+        binary_controller._update_gripper_command(snapshot(15, stick_y=1.0), 4.1)
+        self.assertAlmostEqual(binary_adapter.gripper_commands[-1][0], 0.001)
+        binary_controller._update_gripper_command(snapshot(16), 4.2)
+        self.assertEqual(binary_adapter.gripper_commands[-1], (0.0, 1.0))
 
     def test_das_adapter_maps_closedness_and_initializes_from_encoder(self):
         self.assertAlmostEqual(
@@ -726,7 +766,9 @@ class TestMarvinHardware(unittest.TestCase):
             "sequence_gaps": 0,
         }
         statistics = {
-            "/raw/pico/frame": topic(),
+            "/raw/pico/poses": topic(),
+            "/raw/pico/joy": topic(),
+            "/raw/pico/status": topic(),
             "/raw/marvin/joint_state": topic(),
             "/command/marvin/joint_target": topic(),
         }
@@ -758,16 +800,24 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertEqual(len(missing_vision_manifest["errors"]), 2)
 
     def test_ros_pico_client_accepts_source_sequence_restart(self):
+        try:
+            from geometry_msgs.msg import PoseArray
+        except ImportError as error:
+            self.skipTest(str(error))
+        from xr_marvin_teleop.ros.protocol import PICO_TOPICS, SampleJoiner, pico_messages, sample_status
         client = RosPicoClient.__new__(RosPicoClient)
+        client._timing = None
         client._condition = threading.Condition()
         client._snapshot = None
         client._valid = False
         client._sequence_id = 0
         client._update_id = 0
         client._receive_steady_ns = 0
+        client._topics = PICO_TOPICS
+        client._joiner = SampleJoiner(PICO_TOPICS, 200_000_000)
 
         def message(sequence_id, timestamp_ns):
-            return SimpleNamespace(
+            snapshot = SimpleNamespace(
                 sequence_id=sequence_id,
                 source_timestamp_ns=timestamp_ns,
                 valid=True,
@@ -778,17 +828,33 @@ class TestMarvinHardware(unittest.TestCase):
                 thumbstick_y_values=(0.0, 0.0),
                 button_a=False,
                 button_b=False,
+                button_x=True,
+                button_y=False,
+                timestamp_ns=timestamp_ns,
             )
+            wall = time.time_ns()
+            poses, joy = pico_messages(snapshot, wall)
+            status = sample_status(PICO_TOPICS, wall, "old" if sequence_id == 10 else "new",
+                                   sequence_id, time.monotonic_ns(), source_timestamp_ns=timestamp_ns)
+            client._callback(PICO_TOPICS[0], poses)
+            client._callback("status", status)
+            client._callback(PICO_TOPICS[1], joy)
 
-        client._callback(message(10, 100))
-        client._callback(message(10, 100))
-        client._callback(message(1, 200))
+        message(10, 100)
+        message(10, 100)
+        message(1, 200)
 
         self.assertEqual(client._sequence_id, 1)
         self.assertEqual(client._update_id, 2)
         self.assertEqual(client._snapshot.timestamp_ns, 200)
+        self.assertTrue(client._snapshot.button_x)
 
     def test_ros_das_client_maps_feedback_and_publishes_commands(self):
+        try:
+            from sensor_msgs.msg import JointState
+        except ImportError as error:
+            self.skipTest(str(error))
+        from xr_marvin_teleop.ros.protocol import GRIPPER_NAMES, SampleJoiner, joint_state, sample_status
         configurations = (
             DASFingerConfiguration("/dev/left", "/dev/video-left", 0.01, 0.07),
             DASFingerConfiguration(
@@ -809,25 +875,16 @@ class TestMarvinHardware(unittest.TestCase):
         client._update_ids = [0, 0]
         client._command_sequence = 0
         client._is_connected = True
+        client._session = "test"
+        client._joiners = [SampleJoiner([f"/raw/das/{side}/state"], 500_000_000) for side in ("left", "right")]
 
         now_ns = time.monotonic_ns()
 
-        def state(side, distance):
-            return SimpleNamespace(
-                side=side,
-                sequence_id=1,
-                distance_m=distance,
-                target_distance_m=0.05,
-                receive_steady_ns=now_ns,
-                status_flags=0,
-                valid=True,
-                header=SimpleNamespace(
-                    stamp=SimpleNamespace(sec=123, nanosec=456)
-                ),
-            )
-
-        client._callback(state("left", 0.055))
-        client._callback(state("right", 0.055))
+        for index, side in enumerate(("left", "right")):
+            wall = time.time_ns()
+            client._callback(index, "", joint_state([0.055], [GRIPPER_NAMES[index]], wall))
+            client._callback(index, "/status", sample_status([f"/raw/das/{side}/state"], wall, "test", 1, now_ns,
+                                                          target_distance_m=0.05, status_flags=0))
 
         class Command:
             def __init__(self):
@@ -838,6 +895,7 @@ class TestMarvinHardware(unittest.TestCase):
         published = []
         client._message_type = Command
         client._publisher = SimpleNamespace(publish=published.append)
+        client._status_publisher = SimpleNamespace(publish=lambda message: None)
 
         np.testing.assert_allclose(
             client.get_initial_gripper_closedness(), (0.25, 0.75)
@@ -845,7 +903,7 @@ class TestMarvinHardware(unittest.TestCase):
         np.testing.assert_allclose(
             client.send_gripper_command((0.2, 0.3)), (0.058, 0.028)
         )
-        self.assertEqual(published[0].closedness, [0.2, 0.3])
+        np.testing.assert_allclose(published[0].points[0].positions, [0.8, 0.7])
 
     def test_ros_image_publish_cannot_block_critical_publish_thread(self):
         bridge = Ros2DataBridge.__new__(Ros2DataBridge)
@@ -1036,6 +1094,7 @@ class TestMarvinHardware(unittest.TestCase):
         self.assertIsNone(arguments.das_gripper_config)
         self.assertIsNone(arguments.das_sdk_root)
         self.assertFalse(arguments.das_from_ros2)
+        self.assertEqual(arguments.gripper_mode, "binary")
 
     def test_standalone_reset_reuses_safe_cosine_return(self):
         entry_path = (

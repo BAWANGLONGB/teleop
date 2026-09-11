@@ -24,6 +24,7 @@ from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     DEFAULT_JOINT_K,
     DEFAULT_JOINT_VELOCITY_RATIO,
     DEFAULT_GRIPPER_COMMAND_HZ,
+    DEFAULT_GRIPPER_MODE,
     DEFAULT_GRIPPER_RATE,
     DEFAULT_NSP_ANGLE_RATE_DEG_S,
     DEFAULT_NSP_LATERAL_DEADZONE_M,
@@ -96,12 +97,17 @@ def parse_command_line_arguments(arguments=None):
         action="store_true",
         help="subscribe to the independent raw PICO publisher instead of opening SDK",
     )
-    parser.add_argument("--pico-topic", default="/raw/pico/frame")
+    parser.add_argument("--pico-topic", default="/raw/pico", help="v2 PICO topic prefix")
     parser.add_argument(
         "--gripper-rate", type=float, default=DEFAULT_GRIPPER_RATE
     )
     parser.add_argument(
         "--gripper-command-hz", type=float, default=DEFAULT_GRIPPER_COMMAND_HZ
+    )
+    parser.add_argument(
+        "--gripper-mode",
+        choices=("binary", "continuous"),
+        default=DEFAULT_GRIPPER_MODE,
     )
     parser.add_argument(
         "--thumbstick-y-sign", type=int, choices=(-1, 1), default=1
@@ -264,6 +270,8 @@ def main():
             das_gripper_configurations = load_das_finger_configurations(
                 arguments.das_gripper_config
             )
+            if telemetry_bridge is not None:
+                telemetry_bridge.gripper_configurations = das_gripper_configurations
             if arguments.das_from_ros2:
                 das_gripper_adapter = RosDasClient(
                     das_gripper_configurations,
@@ -335,6 +343,7 @@ def main():
                     for config in modbus_gripper_configurations
                 )
             ),
+            gripper_mode=arguments.gripper_mode,
             gripper_rate=arguments.gripper_rate,
             gripper_command_hz=arguments.gripper_command_hz,
             thumbstick_y_sign=arguments.thumbstick_y_sign,

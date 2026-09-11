@@ -41,6 +41,7 @@ class TestCollectionConfig(unittest.TestCase):
             self.assertFalse(args.h264)
             self.assertEqual(args.h264_crf, 29)
             self.assertEqual(config["paths"]["das_config"], str(DEFAULT_CONFIG.parent / "das_gripper.example.json"))
+            self.assertEqual(config["robot"]["gripper_mode"], "binary")
             args = parser.parse_args(["--config", str(path), "--vision", "--h264", "--h264-crf", "18", "--output-root", "relative-cli"])
             apply_config(args)
             self.assertFalse(args.no_vision)
@@ -156,6 +157,7 @@ class TestCollectionConfig(unittest.TestCase):
             self.assertEqual(recorder[recorder.index("--session") + 1], "session_test")
             self.assertEqual(recorder[recorder.index("--episode-id") + 1], "episode_120000_deadbeef")
             self.assertIn("--encoder-stale-timeout", commands["das_left"])
+            self.assertEqual(commands["hardware"][commands["hardware"].index("--gripper-mode") + 1], "binary")
 
     def test_recorder_persists_configuration_before_capture(self):
         project = DEFAULT_CONFIG.parent.parent

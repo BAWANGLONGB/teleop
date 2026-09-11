@@ -13,6 +13,7 @@ import numpy as np
 
 from .collection_config import write_json
 from .episode_validator import sha256_file
+from xr_marvin_teleop.ros.protocol import JOINT_NAMES, joint_positions
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -152,6 +153,8 @@ class UrdfForwardKinematics:
 
 
 def _header_time_ns(message):
+    if hasattr(message, "timestamp"):
+        return int(message.timestamp.sec) * 1_000_000_000 + int(message.timestamp.nanosec)
     header = getattr(message, "header", None)
     if header is None and hasattr(message, "image"):
         header = message.image.header
@@ -175,7 +178,7 @@ def _topic_time_ns(topic, message, bag_time_ns):
     header_time_ns = _header_time_ns(message)
     if header_time_ns:
         return header_time_ns, (
-            "header.stamp"
+            "timestamp" if hasattr(message, "timestamp") else "header.stamp"
             if getattr(message, "header", None) is not None
             or hasattr(message, "image")
             else "payload.wall_time_ns"
@@ -183,27 +186,26 @@ def _topic_time_ns(topic, message, bag_time_ns):
     return int(bag_time_ns), "bag_time_ns"
 
 
-def _pose_message(message_type, source_message, arm, transform, source):
+def _matrix_quaternion(rotation):
+    """Unit xyzw quaternion, including rotations near pi (no trace division)."""
+    r = np.asarray(rotation)
+    k = np.array([
+        [r[0, 0]-r[1, 1]-r[2, 2], r[0, 1]+r[1, 0], r[0, 2]+r[2, 0], r[2, 1]-r[1, 2]],
+        [r[0, 1]+r[1, 0], r[1, 1]-r[0, 0]-r[2, 2], r[1, 2]+r[2, 1], r[0, 2]-r[2, 0]],
+        [r[0, 2]+r[2, 0], r[1, 2]+r[2, 1], r[2, 2]-r[0, 0]-r[1, 1], r[1, 0]-r[0, 1]],
+        [r[2, 1]-r[1, 2], r[0, 2]-r[2, 0], r[1, 0]-r[0, 1], np.trace(r)],
+    ])
+    quaternion = np.linalg.eigh(k)[1][:, -1]
+    return quaternion if quaternion[3] >= 0 else -quaternion
+
+
+def _pose_message(message_type, source_message, transform):
     result = message_type()
     result.header.stamp = source_message.header.stamp
     result.header.frame_id = "world"
-    result.sequence_id = source_message.sequence_id
-    result.source_timestamp_ns = getattr(
-        source_message,
-        "source_timestamp_ns",
-        int(source_message.header.stamp.sec) * 1_000_000_000
-        + int(source_message.header.stamp.nanosec),
-    )
-    result.receive_steady_ns = getattr(
-        source_message,
-        "receive_steady_ns",
-        getattr(source_message, "issue_steady_ns", 0),
-    )
-    result.valid = getattr(source_message, "valid", True)
-    result.side = ("left", "right")[arm]
-    result.source = source
-    result.xyz_m = transform[:3, 3].tolist()
-    result.rpy_rad = list(_matrix_rpy(transform[:3, :3]))
+    result.pose.position.x, result.pose.position.y, result.pose.position.z = transform[:3, 3].tolist()
+    (result.pose.orientation.x, result.pose.orientation.y,
+     result.pose.orientation.z, result.pose.orientation.w) = _matrix_quaternion(transform[:3, :3]).tolist()
     return result
 
 
@@ -218,10 +220,10 @@ def postprocess_episode(
         import rosbag2_py
         from rclpy.serialization import deserialize_message, serialize_message
         from rosidl_runtime_py.utilities import get_message
-        from teleop_msgs.msg import TcpPose
+        from geometry_msgs.msg import PoseStamped
     except (ImportError, OSError) as error:
         raise RuntimeError(
-            "post-processing requires sourced ROS2 and a built teleop_msgs workspace"
+            "post-processing requires sourced ROS2 and foxglove_msgs"
         ) from error
 
     episode_directory = Path(episode_directory).expanduser().resolve()
@@ -269,6 +271,8 @@ def postprocess_episode(
             rosbag2_py.ConverterOptions("", ""),
         )
         for item in reader.get_all_topics_and_types():
+            if item.type.startswith("teleop_msgs/"):
+                raise ValueError("legacy teleop_msgs bag: run scripts/data/migrate_messages_v2.py first")
             previous = topic_metadata.get(item.name)
             if previous is not None and previous.type != item.type:
                 raise ValueError(f"topic type mismatch for {item.name}")
@@ -326,7 +330,7 @@ def postprocess_episode(
             writer.create_topic(
                 rosbag2_py.TopicMetadata(
                     name=name,
-                    type="teleop_msgs/msg/TcpPose",
+                    type="geometry_msgs/msg/PoseStamped",
                     serialization_format="cdr",
                 )
             )
@@ -380,17 +384,13 @@ def postprocess_episode(
             writer.write(topic, serialized, aligned_time_ns)
             counts[topic] += 1
             if topic in DERIVED_TOPICS:
-                source_name = (
-                    "joint_feedback_fk"
-                    if topic == "/raw/marvin/joint_state"
-                    else "teleop_joint_target_fk"
-                )
+                positions = joint_positions(message)
                 for arm, target_topic in enumerate(DERIVED_TOPICS[topic]):
                     transform = kinematics.forward(
-                        arm, message.q_rad[arm * 7 : (arm + 1) * 7]
+                        arm, positions[arm * 7 : (arm + 1) * 7]
                     )
                     pose = _pose_message(
-                        TcpPose, message, arm, transform, source_name
+                        PoseStamped, message, transform
                     )
                     writer.write(
                         target_topic, serialize_message(pose), aligned_time_ns
@@ -412,6 +412,8 @@ def postprocess_episode(
         item["mean_ns"] = 0 if not item["count"] else total_ns // item["count"]
     summary = {
         "schema_version": 3,
+        "message_protocol_version": 2,
+        "derived_sources": {target: source for source, targets in DERIVED_TOPICS.items() for target in targets},
         "processed_at_ns": time.time_ns(),
         "input_bags": [
             str(path.relative_to(episode_directory)) for path in input_paths

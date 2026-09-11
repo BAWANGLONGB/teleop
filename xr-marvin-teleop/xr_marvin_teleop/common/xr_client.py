@@ -1,5 +1,5 @@
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -27,6 +27,8 @@ class XrSnapshot:
     thumbstick_y_values: tuple[float, float] = (0.0, 0.0)
     button_x: bool = False
     button_y: bool = False
+    # Local diagnostics only: not part of the ROS payload or source-clock arithmetic.
+    timing: dict = field(default_factory=dict, compare=False, repr=False)
 
     def __post_init__(self):
         timestamp_ns = int(self.timestamp_ns)

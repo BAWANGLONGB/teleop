@@ -163,10 +163,10 @@ def export_episode(episode_directory, options=None, *, add_missing=False):
     """
     from mcap.reader import make_reader
     from mcap.writer import CompressionType, Writer
-    from foxglove_schemas_protobuf.CompressedImage_pb2 import CompressedImage
     from foxglove_schemas_protobuf.CompressedVideo_pb2 import CompressedVideo
-    from rclpy.serialization import deserialize_message
-    from teleop_msgs.msg import CompressedImageFrame
+    from rclpy.serialization import deserialize_message, serialize_message
+    from sensor_msgs.msg import CompressedImage as RosCompressedImage
+    from diagnostic_msgs.msg import DiagnosticArray
 
     episode = Path(episode_directory).expanduser().resolve()
     metadata = json.loads((episode / "metadata.json").read_text(encoding="utf-8"))
@@ -200,7 +200,6 @@ def export_episode(episode_directory, options=None, *, add_missing=False):
         staging.mkdir()
         for variant in variants:
             target = staging / f"{episode_id}.{variant}.mcap"
-            message_type = CompressedImage if variant == "mjpeg" else CompressedVideo
             encoders = {}
             counts = Counter()
             with ExitStack() as stack:
@@ -209,9 +208,9 @@ def export_episode(episode_directory, options=None, *, add_missing=False):
                 # Mixed ROS2 CDR + Foxglove protobuf: do not claim the ros2 profile.
                 writer.start(library="xr-marvin-teleop")
                 image_schema = writer.register_schema(
-                    name=message_type.DESCRIPTOR.full_name, encoding="protobuf",
-                    data=protobuf_schema(message_type),
-                )
+                    name=CompressedVideo.DESCRIPTOR.full_name, encoding="protobuf",
+                    data=protobuf_schema(CompressedVideo),
+                ) if variant == "h264" else None
                 schemas, channels = {}, {}
                 readers = [make_reader(stack.enter_context(path.open("rb")), validate_crcs=True)
                            for path in inputs]
@@ -221,17 +220,19 @@ def export_episode(episode_directory, options=None, *, add_missing=False):
                     topic = channel.topic
                     camera = topic in ("/raw/das/left/image/compressed", "/raw/das/right/image/compressed")
                     if camera:
-                        if schema is None or schema.name != "teleop_msgs/msg/CompressedImageFrame":
+                        if schema is None or schema.name != "sensor_msgs/msg/CompressedImage":
                             raise ValueError(f"unsupported camera schema for {topic}")
-                        source = deserialize_message(message.data, CompressedImageFrame)
-                        frame = source.image
+                        frame = deserialize_message(message.data, RosCompressedImage)
                         payload = bytes(frame.data)
                         if not payload.startswith(b"\xff\xd8") or b"\xff\xd9" not in payload[-64:]:
                             raise ValueError(f"invalid JPEG in {topic}")
                         output_topic = topic if variant == "mjpeg" else topic.replace("/image/compressed", "/video/compressed")
                         if output_topic not in channels:
+                            camera_schema = image_schema if variant == "h264" else writer.register_schema(
+                                name=schema.name, encoding=schema.encoding, data=schema.data)
                             channels[output_topic] = writer.register_channel(
-                                topic=output_topic, message_encoding="protobuf", schema_id=image_schema,
+                                topic=output_topic, message_encoding="protobuf" if variant == "h264" else "cdr",
+                                schema_id=camera_schema,
                             )
                             if variant == "h264":
                                 side = topic.split("/")[3]
@@ -239,14 +240,28 @@ def export_episode(episode_directory, options=None, *, add_missing=False):
                                 encoders[topic] = H264Encoder(options, fps)
                         if variant == "h264":
                             payload = encoders[topic].encode(payload)
-                        converted = message_type(frame_id=frame.header.frame_id, data=payload,
-                                                 format="jpeg" if variant == "mjpeg" else "h264")
-                        converted.timestamp.FromNanoseconds(message.log_time)
+                        if variant == "h264":
+                            converted = CompressedVideo(frame_id=frame.header.frame_id, data=payload, format="h264")
+                            converted.timestamp.FromNanoseconds(message.log_time)
+                            serialized = converted.SerializeToString()
+                        else:
+                            serialized = message.data
                         writer.add_message(channels[output_topic], message.log_time,
-                                           converted.SerializeToString(), message.log_time,
-                                           sequence=source.sequence_id & 0xFFFFFFFF)
+                                           serialized, message.log_time,
+                                           sequence=message.sequence)
                         counts[output_topic] += 1
                     else:
+                        payload = message.data
+                        if variant == "h264" and topic in (
+                            "/raw/das/left/image/compressed/status", "/raw/das/right/image/compressed/status"
+                        ):
+                            status = deserialize_message(payload, DiagnosticArray)
+                            for entry in status.status[0].values:
+                                if entry.key == "topics":
+                                    entry.value = json.dumps([name.replace("/image/compressed", "/video/compressed")
+                                                             for name in json.loads(entry.value)])
+                            payload = serialize_message(status)
+                            topic = topic.replace("/image/compressed", "/video/compressed")
                         if topic not in channels:
                             if schema is None or not schema.data:
                                 raise ValueError(f"missing embedded schema for {topic}")
@@ -256,7 +271,7 @@ def export_episode(episode_directory, options=None, *, add_missing=False):
                             channels[topic] = writer.register_channel(
                                 topic, channel.message_encoding, schemas[key], metadata=channel.metadata,
                             )
-                        writer.add_message(channels[topic], message.log_time, message.data,
+                        writer.add_message(channels[topic], message.log_time, payload,
                                            message.log_time, sequence=message.sequence)
                         counts[topic] += 1
                 for encoder in encoders.values():

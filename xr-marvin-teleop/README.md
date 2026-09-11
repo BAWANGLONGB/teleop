@@ -45,9 +45,9 @@ PICO 已连接且 `Controller/Send` 打开后运行；头显摘下使用时需�
 python scripts/simulation/teleop_marvin_mujoco.py --scale-factor 0.5
 ```
 
-左右 Trigger 和摇杆 Y 轴采用增量夹爪控制：Trigger 或后拉闭合，前推打开，
-输入回中后保持；冲突时闭合优先。默认满输入的归一化全行程约 `1 s`，夹爪目标最多按 `20 Hz`
-更新。当前 MuJoCo 夹爪仍是固定视觉模型，仿真会验证和记录归一化夹爪目标。
+左右 Trigger 和摇杆 Y 轴默认采用开闭两态夹爪控制：Trigger 或后拉全闭，前推全开，
+输入回中后继续到所选端点；冲突时闭合优先。binary 开闭及 B 键闭合均按 `--gripper-rate` 对称限速，默认 `1.0`（全行程约 1 秒）。可用 `--gripper-mode continuous` 恢复增量控制，夹爪目标最多按 `20 Hz`
+更新。记录的归一化开启度为 `0=闭合、1=开启`；当前 MuJoCo 夹爪仍是固定视觉模型。
 
 如需让冗余构型偏向 J3，可选启用 IK_NSP。Grip 按下时，以按下瞬间的手柄位置
 为零点，Marvin X 位移会映射为 `ZSP_Angle`；默认最大偏角为 `5°`，并按斜率渐变，避免
@@ -177,7 +177,7 @@ Trigger 或摇杆后拉闭合，摇杆前推张开，输入释放后保持。
 ### ROS2 数据采集（可选）
 
 数采设置统一放在 [`config/collection.json`](config/collection.json)：`paths` 管理路径，
-`robot` 管理连接与映射，`capture` 管理模态/采样，`recording` 管理话题/缓存/ROS bag 配置，
+`robot` 管理连接、映射与 `gripper_mode`，`capture` 管理模态/采样，`recording` 管理话题/缓存/ROS bag 配置，
 `preview` 管理预览，`runtime` 管理 CPU/nice/超时，`export` 管理双 MCAP 与 H.264 参数。
 左右相机的分辨率/FPS、触觉频率和夹爪标定仍只在主配置引用的 DAS JSON 中设置；ROS 原生 YAML 保留。
 使用前必须核对 `robot.model` 与实机型号，配置不能替代本次安全确认。
@@ -215,16 +215,12 @@ SDK/双目相机分别由独立进程持有；Marvin 控制进程只订阅输入
 ROS2 命令，录制与图像处理不会进入控制进程。先安装 MCAP 后端、构建消息包并 source：
 
 ```bash
-sudo apt-get install ros-humble-rosbag2-storage-mcap
-cd ros2_ws
-colcon build --packages-select teleop_msgs \
-  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 \
-  -DPYTHON_EXECUTABLE=/usr/bin/python3
-source install/setup.bash
-cd ..
+sudo apt-get install ros-humble-rosbag2-storage-mcap ros-humble-foxglove-msgs
+source /opt/ros/humble/setup.bash
 ```
 
-以下每个终端都需要激活 `Teleop` 环境并 source 同一个 `install/setup.bash`。如果当前
+消息已迁移到 [ROS 2 / Foxglove v2](docs/ros2-message-v2.md)，新采集不依赖 `teleop_msgs`。
+以下每个终端都需要激活 `Teleop` 环境并 source `/opt/ros/humble/setup.bash`。如果当前
 终端曾设置系统 `libstdc++` 预加载，先清除：
 
 ```bash
@@ -292,14 +288,15 @@ python scripts/data/record_episode.py \
 
 | 类别 | 话题 |
 | --- | --- |
-| PICO | `/raw/pico/frame` |
+| PICO | `/raw/pico/poses`、`/raw/pico/joy`、`/raw/pico/status` |
 | Marvin | `/raw/marvin/joint_state`、`/command/marvin/joint_target` |
 | DAS | `/raw/das/{left,right}/state`、`/command/das/target` |
 | 触觉 | `/raw/das/{left,right}/tactile` |
 | 图像 | `/raw/das/{left,right}/image/compressed` |
 | 运行状态 | `/diagnostics`、`/episode/state`、`/episode/event` |
 
-`header.stamp` 是采集机墙钟，`receive_steady_ns` 是不受校时影响的本机单调时钟，
+业务消息使用标准 ROS 2 类型，触觉使用 Foxglove Grid。`header.stamp`（Grid 为 `timestamp`）是采集机墙钟；
+序号、有效性、设备状态和其他时钟移至对应 `/status` 采样诊断。`receive_steady_ns` 是不受校时影响的本机单调时钟，
 `source_timestamp_ns` 保存设备原始时间戳；设备不提供硬件时间时该字段为 `0`。
 最终时间轴使用采集时的系统时间 `header.stamp`，不做单调时钟映射、不扣除相机时延。
 无 header 的 Episode 消息使用 `wall_time_ns`；诊断和无采集时间的消息使用 bag 系统时间。
@@ -321,7 +318,7 @@ Episode 的 `final/` 下默认只有两个最终文件，每个都包含完整�
 双路图像，以及元数据/校准附件，无需外部 MP4 或 Parquet：
 
 ```text
-final/episode_<time>_<id>.mjpeg.mcap  # 原始 JPEG 字节，foxglove.CompressedImage
+final/episode_<time>_<id>.mjpeg.mcap  # 原始 JPEG 字节，sensor_msgs/msg/CompressedImage
 final/episode_<time>_<id>.h264.mcap   # Annex B，foxglove.CompressedVideo
 ```
 
@@ -388,7 +385,7 @@ python scripts/data/collect_successful_mcaps.py --output dataset/successful_v1
 **Y** 将本次 UI 后台运行中最近一段已结束的录制整体移到 `dataset/.trash/`（原始数据和两种最终 MCAP 一起，可恢复）。
 Y 不追删更早段落，重启后台后不自动选取历史数据。录制中不能删除，启动/保存中忽略按键；
 长按不重复，启动/重连先松开再按，X/Y 同按不执行。A/B 原有功能不变。
-手柄通过非阻塞本地 socket 交给后台线程执行，不等待 HTTP、转码或文件操作，不改变 ROS PicoFrame 格式。
+手柄通过非阻塞本地 socket 交给后台线程执行，不等待 HTTP、转码或文件操作；ROS 输入使用 v2 poses/joy/status。
 浏览器修改参数会同步给后台；关闭浏览器仍使用最近同步参数，不支持脱离 UI 后台的 CLI 热键。
 首次更新需重新编译原生 binding（停止设备后 `python setup.py build_ext --inplace`，使用 Teleop 环境），
 再重启 UI 后台和设备、刷新页面。
@@ -410,11 +407,10 @@ JSONL 继续作为控制调试日志，不作为训练数据的主格式。
 python -m unittest discover -s tests -v
 ```
 
-完整视频集成测试还需要 ROS2、已构建的 `teleop_msgs` 和 `.[h264]` 依赖；缺少时该项会明确跳过：
+完整集成测试需要 ROS2、`ros-humble-foxglove-msgs` 和 `.[h264]` 依赖；缺少时相关项会明确跳过：
 
 ```bash
 source /opt/ros/humble/setup.bash
-source ros2_ws/install/setup.bash
 python -m unittest discover -s tests -v
 ```
 

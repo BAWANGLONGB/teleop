@@ -73,6 +73,7 @@ def parse_command_line_arguments(arguments=None):
     parser.add_argument("--camera-startup-timeout", type=float)
     parser.add_argument("--robot-ip")
     parser.add_argument("--thumbstick-y-sign", type=int, choices=(-1, 1))
+    parser.add_argument("--gripper-mode", choices=("binary", "continuous"))
     parser.add_argument("--scale-factor", type=float)
     parser.add_argument("--nsp-lateral", action="store_true")
     parser.add_argument("--nsp-max-angle", type=float)
@@ -146,6 +147,12 @@ def _preflight(arguments):
             "MCAP storage plugin is missing; install it with: "
             "sudo apt-get install ros-humble-rosbag2-storage-mcap"
         )
+    try:
+        from foxglove_msgs.msg import Grid
+        from rclpy.serialization import serialize_message
+        serialize_message(Grid())
+    except (ImportError, OSError) as error:
+        raise RuntimeError("v2 messages unavailable; source ROS2 and install ros-humble-foxglove-msgs") from error
 
     arguments.das_config = arguments.das_config.expanduser().resolve()
     arguments.das_sdk_root = arguments.das_sdk_root.expanduser().resolve()
@@ -259,6 +266,8 @@ def _build_commands(arguments):
         str(arguments.scale_calibration_path),
         "--thumbstick-y-sign",
         str(arguments.thumbstick_y_sign),
+        "--gripper-mode",
+        arguments.gripper_mode,
         "--ros2",
         "--pico-from-ros2",
     ]

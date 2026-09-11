@@ -41,7 +41,6 @@ COLLECTION_SETTINGS = validate_config(load_config())
 
 CONDA_SETUP = WORKSPACE / ".miniconda-xr" / "etc" / "profile.d" / "conda.sh"
 ROS_BASE_SETUP = Path("/opt/ros/humble/setup.bash")
-ROS_SETUP = PROJECT_ROOT / "ros2_ws" / "install" / "setup.bash"
 DATASET_ROOT = Path(COLLECTION_SETTINGS["paths"]["output_root"])
 COLLECTION_SCRIPT = PROJECT_ROOT / "scripts" / "data" / "run_collection.py"
 RESET_SCRIPT = PROJECT_ROOT / "scripts" / "hardware" / "reset_marvin_hardware.py"
@@ -89,15 +88,15 @@ def print_status_error(source, message):
 @lru_cache(maxsize=1)
 def teleop_environment():
     environment = os.environ.copy()
-    missing = [str(path) for path in (CONDA_SETUP, ROS_BASE_SETUP, ROS_SETUP, TELEOP_PYTHON) if not path.is_file()]
+    missing = [str(path) for path in (CONDA_SETUP, ROS_BASE_SETUP, TELEOP_PYTHON) if not path.is_file()]
     if missing:
         raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, f"遥操环境文件缺失：{', '.join(missing)}")
     try:
         result = subprocess.run(
             (
                 "bash", "-c",
-                'source "$1" && conda activate Teleop && source "$2" && source "$3" && unset LD_PRELOAD && env -0',
-                "fieldnote", str(CONDA_SETUP), str(ROS_BASE_SETUP), str(ROS_SETUP),
+                'source "$1" && conda activate Teleop && source "$2" && unset LD_PRELOAD && env -0',
+                "fieldnote", str(CONDA_SETUP), str(ROS_BASE_SETUP),
             ),
             capture_output=True, timeout=5, check=False,
         )
@@ -278,7 +277,7 @@ def episode_record(path):
     modalities = [
         label for label, present in (
             ("关节", any("marvin" in topic for topic in topics)),
-            ("PICO", "/raw/pico/frame" in topics),
+            ("PICO", bool({"/raw/pico/poses", "/raw/pico/frame"} & topics)),
             ("触觉", any("tactile" in topic for topic in topics)),
             ("视觉", any("image" in topic for topic in topics)),
         ) if present

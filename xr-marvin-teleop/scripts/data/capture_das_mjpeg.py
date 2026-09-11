@@ -69,11 +69,11 @@ class NativeMjpegWriter:
             from gi.repository import Gst
             import rosbag2_py
             from rclpy.serialization import serialize_message
-            from teleop_msgs.msg import CompressedImageFrame
+            from sensor_msgs.msg import CompressedImage
         except (ImportError, OSError, ValueError) as error:
             raise RuntimeError(
                 "native MJPEG recording requires GStreamer, rosbag2_py, and "
-                "the latest teleop_msgs"
+                "sensor_msgs"
             ) from error
 
         self.side = side
@@ -105,7 +105,9 @@ class NativeMjpegWriter:
         self._Gst = Gst
         self._rosbag2_py = rosbag2_py
         self._serialize_message = serialize_message
-        self._message_type = CompressedImageFrame
+        self._message_type = CompressedImage
+        import uuid
+        self._session = uuid.uuid4().hex
         self._stop_event = threading.Event()
         self._completed = False
         self._sequence = 0
@@ -135,10 +137,12 @@ class NativeMjpegWriter:
         self._writer.create_topic(
             rosbag2_py.TopicMetadata(
                 name=self.topic,
-                type="teleop_msgs/msg/CompressedImageFrame",
+                type="sensor_msgs/msg/CompressedImage",
                 serialization_format="cdr",
             )
         )
+        self._writer.create_topic(rosbag2_py.TopicMetadata(
+            name=self.topic + "/status", type="diagnostic_msgs/msg/DiagnosticArray", serialization_format="cdr"))
 
     def _write_preview(self, payload, steady_ns):
         if (
@@ -200,24 +204,28 @@ class NativeMjpegWriter:
         self._write_preview(payload, receive_steady_ns)
 
         message = self._message_type()
-        message.image.header.stamp.sec, message.image.header.stamp.nanosec = divmod(
+        message.header.stamp.sec, message.header.stamp.nanosec = divmod(
             wall_time_ns, 1_000_000_000
         )
-        message.image.header.frame_id = f"finger_{self.side}_camera"
-        message.image.format = "jpeg"
-        message.image.data = payload
-        message.sequence_id = self._sequence_id(buffer)
-        message.source_timestamp_ns = (
+        message.header.frame_id = f"das_{self.side}_camera_optical_frame"
+        message.format = "jpeg"
+        message.data = payload
+        sequence = self._sequence_id(buffer)
+        source_timestamp_ns = (
             0
             if buffer.pts == self._Gst.CLOCK_TIME_NONE
             else int(buffer.pts)
         )
-        message.receive_steady_ns = receive_steady_ns
         self._writer.write(
             self.topic,
             self._serialize_message(message),
             wall_time_ns,
         )
+        from xr_marvin_teleop.ros.protocol import sample_status
+        status = sample_status([self.topic], wall_time_ns, self._session, sequence,
+                               receive_steady_ns, source_timestamp_ns=source_timestamp_ns,
+                               source_clock="gstreamer_pts")
+        self._writer.write(self.topic + "/status", self._serialize_message(status), wall_time_ns)
 
     def run(self):
         state_change = self._pipeline.set_state(self._Gst.State.PLAYING)

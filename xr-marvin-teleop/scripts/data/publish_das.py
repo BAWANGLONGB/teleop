@@ -6,15 +6,19 @@ import math
 import queue
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from xr_marvin_teleop.hardware.interface.das_finger import (
     ARM_NAMES,
     DASFingerCalibrationRequired,
     _decode_encoder_value,
-    closedness_to_das_distances,
     load_das_finger_configurations,
     load_das_sdk,
+)
+from xr_marvin_teleop.ros.protocol import (
+    GRIPPER_NAMES, SampleJoiner, gripper_targets, joint_state, tactile_grid,
+    sample_status, status_topic,
 )
 
 
@@ -38,13 +42,17 @@ class DasSidePublisher:
                 QoSProfile,
                 ReliabilityPolicy,
             )
-            from teleop_msgs.msg import DasState, GripperCommand, TactileFrame
+            from sensor_msgs.msg import JointState
+            from trajectory_msgs.msg import JointTrajectory
+            from foxglove_msgs.msg import Grid
         except (ImportError, OSError) as error:
             raise RuntimeError(
-                "DAS publishing requires sourced ROS2 and teleop_msgs"
+                "DAS publishing requires sourced ROS2 and foxglove_msgs"
             ) from error
 
         self.side = side
+        self._session = uuid.uuid4().hex
+        self._command_joiner = SampleJoiner(["/command/das/target"], int(encoder_stale_timeout_seconds * 1e9))
         self.arm_index = ARM_NAMES.index(side)
         self.configurations = tuple(configurations)
         self.configuration = self.configurations[self.arm_index]
@@ -72,8 +80,6 @@ class DasSidePublisher:
         )
         self._rclpy = rclpy
         self._types = {
-            "DasState": DasState,
-            "TactileFrame": TactileFrame,
             "DiagnosticArray": DiagnosticArray,
             "DiagnosticStatus": DiagnosticStatus,
             "KeyValue": KeyValue,
@@ -83,20 +89,26 @@ class DasSidePublisher:
             rclpy.init()
         self._node = rclpy.create_node(f"das_{side}_source")
         self._state_publisher = self._node.create_publisher(
-            DasState, f"/raw/das/{side}/state", critical_qos
+            JointState, f"/raw/das/{side}/state", critical_qos
         )
         self._tactile_publisher = self._node.create_publisher(
-            TactileFrame, f"/raw/das/{side}/tactile", sensor_qos
+            Grid, f"/raw/das/{side}/tactile", sensor_qos
         )
         self._diagnostic_publisher = self._node.create_publisher(
             DiagnosticArray, "/diagnostics", critical_qos
         )
         self._command_subscription = self._node.create_subscription(
-            GripperCommand,
+            JointTrajectory,
             "/command/das/target",
             self._handle_command,
             critical_qos,
         )
+        self._command_status_subscription = self._node.create_subscription(
+            DiagnosticArray, "/command/das/target/status",
+            lambda message: self._handle_command(message, "status"), critical_qos)
+        self._sample_publishers = {kind: self._node.create_publisher(
+            DiagnosticArray, status_topic(f"/raw/das/{side}/{kind}"),
+            critical_qos if kind == "state" else sensor_qos) for kind in ("state", "tactile")}
 
         self._state_queue = queue.Queue(maxsize=128)
         self._tactile_queue = queue.Queue(maxsize=32)
@@ -201,23 +213,23 @@ class DasSidePublisher:
             "tactile",
         )
 
-    def _handle_command(self, message):
-        sequence_id = int(message.sequence_id)
-        if sequence_id <= self._last_command_sequence and not (
-            sequence_id == 1 and self._last_command_sequence > 1
-        ):
-            return
+    def _handle_command(self, message, topic="/command/das/target"):
         if not self._encoder_ready.is_set():
             return
         try:
-            target_m = closedness_to_das_distances(
-                message.closedness, self.configurations
-            )[self.arm_index]
+            joined = self._command_joiner.push(topic, message)
+            if joined is None:
+                return
+            parts, values, _ = joined
+            if not values["valid"]:
+                return
+            targets = gripper_targets(parts["/command/das/target"], self.configurations)
+            target_m = targets[self.arm_index]
             self._bus.set_target_distance(target_m)
         except Exception as error:
             self._error = error
             return
-        self._last_command_sequence = sequence_id
+        self._last_command_sequence = values["sequence_id"]
         with self._target_lock:
             self._target_m = target_m
 
@@ -235,31 +247,24 @@ class DasSidePublisher:
             except queue.Empty:
                 break
             sequence, wall, steady, valid, distance, target, flags = item
-            message = self._types["DasState"]()
-            self._stamp(message.header, wall, f"finger_{self.side}")
-            message.sequence_id = sequence
-            message.source_timestamp_ns = 0
-            message.receive_steady_ns = steady
-            message.valid = valid
-            message.side = self.side
-            message.distance_m = distance
-            message.target_distance_m = target
-            message.status_flags = flags
+            message = joint_state([distance], [GRIPPER_NAMES[self.arm_index]], wall)
             self._state_publisher.publish(message)
+            self._sample_publishers["state"].publish(sample_status(
+                [f"/raw/das/{self.side}/state"], wall, self._session, sequence, steady,
+                valid=valid, target_distance_m=target, status_flags=flags))
         while True:
             try:
                 sequence, wall, steady, payload = self._tactile_queue.get_nowait()
             except queue.Empty:
                 break
-            message = self._types["TactileFrame"]()
-            self._stamp(message.header, wall, f"finger_{self.side}")
-            message.sequence_id = sequence
-            message.source_timestamp_ns = 0
-            message.receive_steady_ns = steady
-            message.valid = True
-            message.side = self.side
-            message.data = payload
+            try:
+                message = tactile_grid(payload, self.side, wall)
+            except ValueError as error:
+                self._error = error
+                continue
             self._tactile_publisher.publish(message)
+            self._sample_publishers["tactile"].publish(sample_status(
+                [f"/raw/das/{self.side}/tactile"], wall, self._session, sequence, steady))
 
     def _publish_diagnostics(self):
         message = self._types["DiagnosticArray"]()

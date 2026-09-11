@@ -86,6 +86,7 @@ class EpisodePublisher:
         )
 
     def publish(self, publisher, payload):
+        payload = {"message_protocol_version": 2, **payload}
         message = self._string_type()
         message.data = json.dumps(payload, ensure_ascii=False)
         publisher.publish(message)
@@ -218,10 +219,12 @@ def _require_mcap():
         )
     try:
         import rosbag2_py  # noqa: F401
-        from teleop_msgs.msg import CompressedImageFrame, TcpPose  # noqa: F401
+        from sensor_msgs.msg import CompressedImage  # noqa: F401
+        from geometry_msgs.msg import PoseStamped  # noqa: F401
+        from foxglove_msgs.msg import Grid  # noqa: F401
     except (ImportError, OSError) as error:
         raise RuntimeError(
-            "recording requires ROS2 and built teleop_msgs"
+            "recording requires sourced ROS2 and ros-humble-foxglove-msgs"
         ) from error
 
 
@@ -312,6 +315,15 @@ def main():
             }
         )
     metadata = {
+        "message_protocol_version": 2,
+        "message_contract": {
+            "pico_pose_order": ["left", "right"],
+            "pico_axes": ["left_grip", "right_grip", "left_trigger", "right_trigger", "left_thumbstick_y", "right_thumbstick_y"],
+            "pico_buttons": ["a", "b", "x", "y"],
+            "tactile_layout": "das-448-v1: two 224-byte pad rows, UINT8 raw bits, index coordinates; not calibrated pressure",
+            "gripper_position": "logical opening distance in meters; not individual URDF finger displacement",
+            "gripper_command": "normalized openness: 0 closed, 1 open",
+        },
         "schema_version": 1,
         "episode_id": episode_id,
         "session": session_id,

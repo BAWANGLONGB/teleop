@@ -7,6 +7,10 @@ import itertools
 import math
 import os
 from pathlib import Path
+from xr_marvin_teleop.ros.protocol import (JOINT_NAMES, GRIPPER_NAMES, joint_positions,
+    ordered_values, pose_values, status_values, stamp_ns)
+from xr_marvin_teleop.common.episode_postprocessor import _matrix_rpy
+from xr_marvin_teleop.common.xr_target_mapper import _rotation_matrix_from_openxr_pose
 
 
 LEFT_IMAGE = "/raw/das/left/image/compressed"
@@ -54,7 +58,7 @@ def _messages(path, topics):
         from rosidl_runtime_py.utilities import get_message
     except (ImportError, OSError) as error:
         raise RuntimeError(
-            "review requires sourced ROS2, rosbag2_py, and built teleop_msgs"
+            "review requires sourced ROS2, rosbag2_py, and foxglove_msgs"
         ) from error
 
     reader = rosbag2_py.SequentialReader()
@@ -79,23 +83,25 @@ def _messages(path, topics):
         )
 
 
-def _state_value(topic, message):
+def _state_value(topic, message, metadata=None):
+    metadata = metadata or {}
+    valid = bool(metadata.get("valid", False))
     if topic == ROBOT_STATE:
-        return tuple(message.q_rad), tuple(message.dq_rad_s), bool(message.valid)
+        return tuple(joint_positions(message)), tuple(ordered_values(message.name, message.velocity, JOINT_NAMES)), valid
     if topic == JOINT_COMMAND:
-        return tuple(message.q_rad)
+        return tuple(joint_positions(message))
     if topic == GRIPPER_COMMAND:
-        return tuple(message.closedness)
+        return tuple(joint_positions(message, GRIPPER_NAMES))
     if topic in DAS_STATE.values():
         return (
-            float(message.distance_m),
-            float(message.target_distance_m),
-            bool(message.valid),
+            float(message.position[0]),
+            float(metadata.get("target_distance_m", math.nan)),
+            valid,
         )
     return (
-        tuple(message.xyz_m),
-        tuple(message.rpy_rad),
-        bool(message.valid),
+        tuple(pose_values(message.pose)[:3]),
+        tuple(_matrix_rpy(_rotation_matrix_from_openxr_pose(pose_values(message.pose)))),
+        valid,
     )
 
 
@@ -103,10 +109,17 @@ def _load_state(path):
     # ponytail: state-only index is small for normal episodes; stream/index it
     # on disk if multi-hour recordings ever outgrow RAM.
     series = {topic: ([], []) for topic in STATE_TOPICS}
+    metadata = {}
+    status_topics = [topic + "/status" for topic in (ROBOT_STATE, JOINT_COMMAND, GRIPPER_COMMAND, *DAS_STATE.values())]
+    for _topic, message, _timestamp in _messages(path, status_topics):
+        values = status_values(message)
+        for target in values["topics"]:
+            metadata[target, stamp_ns(message)] = values
     for topic, message, timestamp_ns in _messages(path, STATE_TOPICS):
         times, values = series[topic]
         times.append(timestamp_ns)
-        values.append(_state_value(topic, message))
+        source = ROBOT_STATE if topic in TCP_STATE.values() else JOINT_COMMAND if topic in TCP_COMMAND.values() else topic
+        values.append(_state_value(topic, message, metadata.get((source, stamp_ns(message)))))
     return series
 
 
@@ -196,7 +209,7 @@ def _state_lines(state, timestamp_ns, zero_ns, right_delta_ms):
         lines.append("gripper command: missing")
     else:
         lines.append(
-            f"gripper closedness age={gripper_age:.2f}ms: "
+            f"gripper openness (0=closed, 1=open) age={gripper_age:.2f}ms: "
             f"L={gripper_target[0]:.3f} R={gripper_target[1]:.3f}"
         )
     for side in ("left", "right"):
@@ -237,7 +250,7 @@ def _decode(message):
     import numpy as np
 
     frame = cv2.imdecode(
-        np.frombuffer(bytes(message.image.data), dtype=np.uint8),
+        np.frombuffer(bytes(message.data), dtype=np.uint8),
         cv2.IMREAD_COLOR,
     )
     if frame is None:

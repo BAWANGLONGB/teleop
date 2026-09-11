@@ -7,6 +7,7 @@ from contextlib import closing
 
 from xr_marvin_teleop.common.xr_client import XrClient
 from xr_marvin_teleop.common.collection_hotkeys import CollectionHotkeys
+from xr_marvin_teleop.common.pico_timing import PicoTimingLog
 from xr_marvin_teleop.ros.telemetry_bridge import Ros2DataBridge
 
 
@@ -17,9 +18,13 @@ def main():
     if not 30.0 <= arguments.poll_hz <= 240.0:
         parser.error("--poll-hz must be within [30, 240]")
 
-    publisher = Ros2DataBridge("pico_data_source")
+    timing = PicoTimingLog("source")
+    publisher = Ros2DataBridge("pico_data_source", pico_timing=timing)
     period = 1.0 / arguments.poll_hz
     last_timestamp_ns = None
+    last_new_frame_ns = None
+    last_callback_sequence = None
+    missing_native_timing_reported = False
     invalid_published = False
     hotkeys = CollectionHotkeys()
     try:
@@ -27,16 +32,34 @@ def main():
             xr_client.wait_for_fresh_snapshot()
             next_poll = time.monotonic()
             while True:
+                poll_ns = time.monotonic_ns()
                 try:
                     snapshot = xr_client.read_snapshot()
                 except TimeoutError:
                     snapshot = None
+                read_done_ns = time.monotonic_ns()
+                timing.record("poll", read_ns=read_done_ns - poll_ns,
+                              late_ns=max(0, poll_ns - int(next_poll * 1e9)))
+                if snapshot is not None and snapshot.timing:
+                    sdk = snapshot.timing
+                    timing.record("sdk_cache", age_ns=read_done_ns - sdk["sdk_ready_steady_ns"])
+                    if sdk["sdk_callback_sequence"] != last_callback_sequence:
+                        timing.record("sdk", identity=dict(source_timestamp_ns=snapshot.timestamp_ns, **sdk),
+                                      callback_gap_ns=sdk["sdk_callback_gap_ns"], parse_ns=sdk["sdk_parse_ns"],
+                                      lock_wait_ns=sdk["sdk_ready_steady_ns"] - sdk["sdk_receive_steady_ns"] - sdk["sdk_parse_ns"])
+                        last_callback_sequence = sdk["sdk_callback_sequence"]
+                elif snapshot is not None and not missing_native_timing_reported:
+                    timing.record("sdk", event="native_timing_unavailable_rebuild_extension")
+                    missing_native_timing_reported = True
                 if snapshot is None:
                     hotkeys.update(None)
                     if not invalid_published:
                         publisher.publish_pico(None)
                         invalid_published = True
                 elif snapshot.timestamp_ns != last_timestamp_ns:
+                    timing.record("source", identity=dict(source_timestamp_ns=snapshot.timestamp_ns, **snapshot.timing),
+                                  new_frame_gap_ns=0 if last_new_frame_ns is None else read_done_ns - last_new_frame_ns)
+                    last_new_frame_ns = read_done_ns
                     publisher.publish_pico(snapshot)
                     hotkeys.update(snapshot)
                     last_timestamp_ns = snapshot.timestamp_ns
@@ -52,6 +75,7 @@ def main():
     finally:
         hotkeys.close()
         publisher.close()
+        timing.close()
 
 
 if __name__ == "__main__":

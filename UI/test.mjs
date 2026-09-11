@@ -56,10 +56,16 @@ try {
     await evaluate('sessionFilter.value="session_2026-09-03";sessionFilter.dispatchEvent(new Event("change"));({options:sessionFilter.options.length,visible:[...datasetRows.rows].filter(row=>!row.hidden).map(row=>row.dataset.session)})'),
     { options: 3, visible: ["session_2026-09-03"] },
   );
+  await evaluate('collectionSession.add(new Option("当前 Session",testEpisodes[0].session));collectionSession.value=testEpisodes[0].session;collectionSession.dispatchEvent(new Event("change"))');
+  assert.equal(await evaluate('datasetCount.textContent'), "1");
+  assert.equal(await evaluate('renderEpisodes([...testEpisodes,testEpisodes[0]]);datasetCount.textContent'), "2");
+  assert.equal(await evaluate('lastCollection={active:true,session:testEpisodes[1].session};updateDatasetCount();datasetCount.textContent'), "1");
+  assert.equal(await evaluate('lastCollection={};collectionSession.value="";collectionSession.dispatchEvent(new Event("change"));const d=new Date();const today=`session_${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;renderEpisodes([{...testEpisodes[0],session:today},{...testEpisodes[1],session:"session_old"}]);datasetCount.textContent'), "1");
   await evaluate('renderEpisodes([testEpisodes[0]])');
   assert.equal(await evaluate('document.querySelector("#view-datasets thead").textContent.includes("状态")'), false);
   assert.deepEqual(await evaluate('({workbench:document.querySelectorAll("#view-workbench [data-review-result]").length,datasets:document.querySelectorAll("#view-datasets [data-review-result]").length})'), {workbench:3,datasets:0});
   assert.equal(await evaluate('collectionSession.add(new Option("测试 Session","session_test"));collectionSession.value="session_test";collectionPayload().session'), "session_test");
+  assert.equal(await evaluate('collectionSession.dispatchEvent(new Event("change"));datasetCount.textContent'), "0");
   await evaluate('collectionSession.value="";lastCollection={episode_id:testEpisodes[0].id,session:testEpisodes[0].session,active:true,episode_exists:true,review:{result:"unmarked"}};renderReviewEpisodes()');
   assert.equal(await evaluate('[...document.querySelectorAll("[data-review-result]")].every(b=>b.disabled)'), true);
   await evaluate('lastCollection.active=false;lastCollection.review={result:"success"};renderReviewControls()');

@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <ctime>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -27,6 +28,11 @@ using JsonObject = std::unique_ptr<json_object, decltype(&json_object_put)>;
 
 struct XrSnapshot
 {
+    int64_t sdk_receive_steady_ns = 0;
+    int64_t sdk_ready_steady_ns = 0;
+    int64_t sdk_parse_ns = 0;
+    int64_t sdk_callback_gap_ns = 0;
+    uint64_t sdk_callback_sequence = 0;
     int64_t timestamp_ns;
     Pose left_controller_pose;
     Pose right_controller_pose;
@@ -44,6 +50,13 @@ std::optional<XrSnapshot> latest_snapshot;
 std::mutex lifecycle_mutex;
 bool is_initialized = false;
 std::atomic<bool> parse_error_logged = false;
+
+int64_t monotonic_ns()
+{
+    timespec value{};
+    clock_gettime(CLOCK_MONOTONIC, &value);
+    return int64_t(value.tv_sec) * 1000000000LL + value.tv_nsec;
+}
 
 json_object* require_member(json_object* object, const char* name)
 {
@@ -141,6 +154,7 @@ XrSnapshot parse_snapshot(const PXREADevStateJson& device_state)
 
 void on_client_callback(void*, PXREAClientCallbackType type, int, void* user_data)
 {
+    const int64_t received_ns = monotonic_ns();
     if (type != PXREADeviceStateJson || user_data == nullptr)
     {
         return;
@@ -151,7 +165,12 @@ void on_client_callback(void*, PXREAClientCallbackType type, int, void* user_dat
         // Parse outside the lock; publish only a complete callback, never a partial frame.
         XrSnapshot snapshot =
             parse_snapshot(*static_cast<PXREADevStateJson*>(user_data));
+        snapshot.sdk_receive_steady_ns = received_ns;
+        snapshot.sdk_parse_ns = monotonic_ns() - received_ns;
         std::lock_guard<std::mutex> lock(snapshot_mutex);
+        snapshot.sdk_ready_steady_ns = monotonic_ns();
+        snapshot.sdk_callback_sequence = latest_snapshot ? latest_snapshot->sdk_callback_sequence + 1 : 1;
+        snapshot.sdk_callback_gap_ns = latest_snapshot ? received_ns - latest_snapshot->sdk_receive_steady_ns : 0;
         latest_snapshot = std::move(snapshot);
     }
     catch (const std::exception& error)
@@ -219,6 +238,13 @@ py::object get_snapshot()
     result["button_b"] = snapshot->button_b;
     result["button_x"] = snapshot->button_x;
     result["button_y"] = snapshot->button_y;
+    py::dict timing;
+    timing["sdk_receive_steady_ns"] = snapshot->sdk_receive_steady_ns;
+    timing["sdk_ready_steady_ns"] = snapshot->sdk_ready_steady_ns;
+    timing["sdk_parse_ns"] = snapshot->sdk_parse_ns;
+    timing["sdk_callback_gap_ns"] = snapshot->sdk_callback_gap_ns;
+    timing["sdk_callback_sequence"] = snapshot->sdk_callback_sequence;
+    result["timing"] = timing;
     return result;
 }
 

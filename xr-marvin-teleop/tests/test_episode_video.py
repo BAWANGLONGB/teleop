@@ -44,8 +44,15 @@ class TestEpisodeVideo(unittest.TestCase):
             import rosbag2_py
             from mcap.reader import make_reader
             from rclpy.serialization import serialize_message
-            from teleop_msgs.msg import CompressedImageFrame, JointCommand, MarvinState, PicoFrame
-            from foxglove_schemas_protobuf.CompressedImage_pb2 import CompressedImage
+            from sensor_msgs.msg import CompressedImage as RosImage, JointState, Joy
+            from geometry_msgs.msg import PoseArray
+            from trajectory_msgs.msg import JointTrajectory
+            from diagnostic_msgs.msg import DiagnosticArray
+            from foxglove_msgs.msg import Grid
+            from xr_marvin_teleop.common.xr_client import XrSnapshot
+            from xr_marvin_teleop.ros.protocol import (
+                JOINT_NAMES, PICO_TOPICS, joint_state, trajectory, sample_status, status_topic,
+                pico_messages, tactile_grid, stamp_ns, status_values)
             from foxglove_schemas_protobuf.CompressedVideo_pb2 import CompressedVideo
         except ImportError as error:
             self.skipTest(f"integration dependencies unavailable: {error}")
@@ -55,7 +62,7 @@ class TestEpisodeVideo(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             episode = Path(directory) / "episode_test"
             episode.mkdir()
-            metadata = {"episode_id": episode.name, "status": "completed",
+            metadata = {"episode_id": episode.name, "status": "completed", "message_protocol_version": 2,
                         "bags": ["state", "vision_left", "vision_right"],
                         "camera_profiles": {"left": {"latency_correction_ns": 25000000}}}
             config = load_config()
@@ -79,30 +86,45 @@ class TestEpisodeVideo(unittest.TestCase):
                 writer = rosbag2_py.SequentialWriter()
                 writer.open(rosbag2_py.StorageOptions(uri=str(episode / bag), storage_id="mcap"),
                             rosbag2_py.ConverterOptions("", ""))
-                specs = (("/raw/marvin/joint_state", MarvinState),
-                         ("/command/marvin/joint_target", JointCommand),
-                         ("/raw/pico/frame", PicoFrame)) if bag == "state" else (
-                    (f"/raw/das/{bag.removeprefix('vision_')}/image/compressed", CompressedImageFrame),)
+                specs = (("/raw/marvin/joint_state", JointState),
+                         ("/command/marvin/joint_target", JointTrajectory),
+                         (PICO_TOPICS[0], PoseArray), (PICO_TOPICS[1], Joy),
+                         ("/raw/das/left/tactile", Grid), ("/raw/das/right/tactile", Grid)) if bag == "state" else (
+                    (f"/raw/das/{bag.removeprefix('vision_')}/image/compressed", RosImage),)
                 for topic, message_type in specs:
                     writer.create_topic(rosbag2_py.TopicMetadata(
-                        name=topic, type=f"teleop_msgs/msg/{message_type.__name__}", serialization_format="cdr"))
+                        name=topic, type=message_type.__module__.split('.')[0] + '/msg/' + message_type.__name__, serialization_format="cdr"))
+                for topic in {status_topic(topic) for topic, _ in specs}:
+                    writer.create_topic(rosbag2_py.TopicMetadata(name=topic, type="diagnostic_msgs/msg/DiagnosticArray", serialization_format="cdr"))
                 for i, stamp in enumerate(stamps):
                     for topic, message_type in specs:
                         message = message_type()
-                        message.sequence_id = i + 1
-                        if message_type is CompressedImageFrame:
-                            message.image.data, message.image.format = jpeg, "jpeg"
-                            message.image.header.frame_id = bag
-                            header = message.image.header
-                        else:
-                            header = message.header
-                        header.stamp.sec, header.stamp.nanosec = divmod(stamp, 10**9)
+                        if message_type is JointState:
+                            message = joint_state([0.] * 14, JOINT_NAMES, stamp, [0.] * 14)
+                        elif message_type is JointTrajectory:
+                            message = trajectory([0.] * 14, JOINT_NAMES, stamp)
+                        elif message_type is RosImage:
+                            message.data, message.format = jpeg, "jpeg"
+                            message.header.frame_id = bag
+                        elif message_type is Grid:
+                            message = tactile_grid(bytes(range(256)) + bytes(range(192)), topic.split('/')[3], stamp)
+                        elif message_type in (PoseArray, Joy):
+                            xr_snapshot = XrSnapshot(i + 1, [0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 1], (0., 0.), False, False)
+                            message = pico_messages(xr_snapshot, stamp)[0 if message_type is PoseArray else 1]
+                        if hasattr(message, "header"):
+                            message.header.stamp.sec, message.header.stamp.nanosec = divmod(stamp, 10**9)
                         # Deliberately unrelated monotonic clock: it must not affect final time.
                         if hasattr(message, "receive_steady_ns"):
                             message.receive_steady_ns = 999 + i
                         data = serialize_message(message)
                         originals[topic, stamp] = data
                         writer.write(topic, data, stamp + 1_000_000)
+                        if topic != PICO_TOPICS[1]:
+                            targets = PICO_TOPICS if topic == PICO_TOPICS[0] else [topic]
+                            status = sample_status(targets, stamp, "test", i + 1, 999 + i)
+                            status_data = serialize_message(status)
+                            originals[status_topic(topic), stamp] = status_data
+                            writer.write(status_topic(topic), status_data, stamp + 1_000_000)
                 writer.close()
             summary = postprocess_episode(episode)
             self.assertEqual(summary["alignment"]["clock"], "CLOCK_REALTIME")
@@ -118,6 +140,8 @@ class TestEpisodeVideo(unittest.TestCase):
             outputs = export_episode(episode, options)
             self.assertEqual(len(outputs), 2)
             for output in outputs:
+                from scripts.data.migrate_sessions import verify
+                self.assertEqual(len(verify(output)["counts"]), 19)
                 variant = output.suffixes[-2]
                 counts, keys = Counter(), {"left": [], "right": []}
                 decoders = {side: av.CodecContext.create("h264", "r") for side in keys}
@@ -130,12 +154,9 @@ class TestEpisodeVideo(unittest.TestCase):
                         index = counts[topic]
                         counts[topic] += 1
                         if schema.name.startswith("foxglove."):
-                            value = (CompressedImage if variant == ".mjpeg" else CompressedVideo).FromString(message.data)
+                            value = CompressedVideo.FromString(message.data)
                             self.assertEqual(value.timestamp.ToNanoseconds(), stamps[index])
-                            if variant == ".mjpeg":
-                                self.assertEqual(value.data, jpeg)
-                                self.assertEqual(value.format, "jpeg")
-                            else:
+                            if variant == ".h264":
                                 side = topic.split("/")[3]
                                 nals = h264_nal_types(value.data)
                                 if 5 in nals:
@@ -147,9 +168,19 @@ class TestEpisodeVideo(unittest.TestCase):
                                 self.assertEqual(len(frames), 1)
                                 self.assertNotEqual(frames[0].pict_type, av.video.frame.PictureType.B)
                                 self.assertEqual((frames[0].width, frames[0].height), (64, 48))
+                        elif schema.name == "sensor_msgs/msg/CompressedImage":
+                            from rclpy.serialization import deserialize_message
+                            frame = deserialize_message(message.data, RosImage)
+                            self.assertEqual(bytes(frame.data), jpeg)
+                            self.assertEqual(stamp_ns(frame), message.log_time)
+                        elif "/video/compressed/status" in topic:
+                            from rclpy.serialization import deserialize_message
+                            status = status_values(deserialize_message(message.data, DiagnosticArray))
+                            self.assertEqual(status["topics"], [topic.removesuffix("/status")])
                         elif (topic, message.log_time) in originals:
                             self.assertEqual(message.data, originals[topic, message.log_time])
-                    self.assertEqual(len(counts), 9)  # 3 original + 4 FK + 2 cameras
+                        self.assertFalse(schema.name.startswith("teleop_msgs/"))
+                    self.assertEqual(len(counts), 19)  # 6 state + 4 FK + 2 cameras + 7 metadata
                     self.assertEqual(set(counts.values()), {7})
                     attachments = {a.name: a.data for a in reader.iter_attachments()}
                     self.assertEqual(len(attachments), 1 + len(metadata["config_files"]))

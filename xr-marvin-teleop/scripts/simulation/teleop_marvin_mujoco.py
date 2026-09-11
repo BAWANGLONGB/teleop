@@ -13,6 +13,7 @@ from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
 )
 from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     DEFAULT_GRIPPER_COMMAND_HZ,
+    DEFAULT_GRIPPER_MODE,
     DEFAULT_GRIPPER_RATE,
     DEFAULT_NSP_ANGLE_RATE_DEG_S,
     DEFAULT_NSP_LATERAL_DEADZONE_M,
@@ -53,6 +54,11 @@ def parse_command_line_arguments():
     )
     parser.add_argument(
         "--gripper-command-hz", type=float, default=DEFAULT_GRIPPER_COMMAND_HZ
+    )
+    parser.add_argument(
+        "--gripper-mode",
+        choices=("binary", "continuous"),
+        default=DEFAULT_GRIPPER_MODE,
     )
     parser.add_argument(
         "--thumbstick-y-sign", type=int, choices=(-1, 1), default=1
@@ -134,6 +140,7 @@ def main():
             pd_settle_seconds=0.0,
             session_logger=session_logger,
             gripper_control_enabled=True,
+            gripper_mode=arguments.gripper_mode,
             gripper_rate=arguments.gripper_rate,
             gripper_command_hz=arguments.gripper_command_hz,
             thumbstick_y_sign=arguments.thumbstick_y_sign,

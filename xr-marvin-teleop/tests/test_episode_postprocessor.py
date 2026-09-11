@@ -164,9 +164,17 @@ class TestEpisodePostprocessor(unittest.TestCase):
         publisher._handle_encoder(struct.pack(">f", 0.04))
         self.assertTrue(publisher._encoder_ready.is_set())
         self.assertAlmostEqual(publisher._bus.targets[0], 0.04)
-        publisher._handle_command(
-            SimpleNamespace(sequence_id=1, closedness=(1.0, 0.0))
-        )
+        try:
+            from xr_marvin_teleop.ros.protocol import SampleJoiner, GRIPPER_NAMES, trajectory, sample_status
+            import time
+            now = time.time_ns()
+            command = trajectory([0., 1.], GRIPPER_NAMES, now)
+        except ImportError as error:
+            self.skipTest(f"ROS2 unavailable: {error}")
+        publisher._command_joiner = SampleJoiner(["/command/das/target"], 500_000_000)
+        publisher._handle_command(command)
+        self.assertAlmostEqual(publisher._bus.targets[-1], 0.04)
+        publisher._handle_command(sample_status(["/command/das/target"], now, "test", 1, time.monotonic_ns(), command=True), "status")
         self.assertEqual(publisher._bus.targets[-1], 0.0)
 
     def test_native_mjpeg_pipeline_never_decodes_or_reencodes(self):
@@ -273,7 +281,9 @@ class TestEpisodePostprocessor(unittest.TestCase):
             }
 
         state = {
-            "/raw/pico/frame": topic(),
+            "/raw/pico/poses": topic(),
+            "/raw/pico/joy": topic(),
+            "/raw/pico/status": topic(),
             "/raw/marvin/joint_state": topic(),
             "/command/marvin/joint_target": topic(),
         }

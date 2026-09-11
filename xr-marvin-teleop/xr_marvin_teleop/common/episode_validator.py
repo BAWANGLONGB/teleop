@@ -3,9 +3,11 @@
 import hashlib
 import json
 import time
+import sqlite3
 from pathlib import Path
 
 from .collection_config import write_json
+from xr_marvin_teleop.ros.protocol import status_values, stamp_ns, status_topic
 
 
 def sha256_file(path):
@@ -50,12 +52,20 @@ def inspect_bag(
             "source_time_regressions": 0,
             "sequence_gaps": 0,
             "steady_alignment_errors": 0,
+            "decode_errors": 0,
+            "metadata_missing": 0,
+            "metadata_orphans": 0,
+            "invalid_samples": 0,
+            "sequence_check": "unavailable",
         }
         for topic, type_name in topic_types.items()
     }
     last_bag_time = {}
     last_source_time = {}
     last_sequence = {}
+    # Disk-backed exact matching keeps multi-hour validation bounded in memory.
+    samples = sqlite3.connect("")
+    samples.execute("CREATE TABLE samples (topic TEXT, stamp INTEGER, data INTEGER, metadata INTEGER)")
     while reader.has_next():
         topic, serialized, bag_time_ns = reader.read_next()
         item = statistics[topic]
@@ -72,7 +82,39 @@ def inspect_bag(
             message_type = message_types[topic]
             message = deserialize_message(serialized, message_type)
         except Exception:
+            item["decode_errors"] += 1
             continue
+        if topic.endswith("/status"):
+            try:
+                values = status_values(message)
+                timestamp = stamp_ns(message)
+                session = values["publisher_session_id"]
+                sequence = values["sequence_id"]
+                source_time = int(values["source_timestamp_ns"])
+                for target in values["topics"]:
+                    if status_topic(target) != topic:
+                        raise ValueError("metadata topic does not match payload target")
+                    samples.execute("INSERT INTO samples VALUES (?, ?, 0, 1)", (target, timestamp))
+                    if target not in statistics:
+                        item["metadata_orphans"] += 1
+                        continue
+                    target_stats = statistics[target]
+                    target_stats["sequence_check"] = "available"
+                    target_stats["invalid_samples"] += int(not values["valid"])
+                    key = (target, session)
+                    previous = last_sequence.get(key)
+                    if previous is not None and sequence != previous + 1:
+                        target_stats["sequence_gaps"] += max(1, sequence - previous - 1)
+                    last_sequence[key] = sequence
+                    if source_time and source_time < last_source_time.get(key, source_time):
+                        target_stats["source_time_regressions"] += 1
+                    if source_time:
+                        last_source_time[key] = source_time
+            except (ValueError, TypeError, KeyError, AttributeError):
+                item["decode_errors"] += 1
+            continue
+        if hasattr(message, "header") or hasattr(message, "timestamp"):
+            samples.execute("INSERT INTO samples VALUES (?, ?, 1, 0)", (topic, stamp_ns(message)))
         source_time = int(getattr(message, "source_timestamp_ns", 0))
         if source_time:
             if source_time < last_source_time.get(topic, source_time):
@@ -102,6 +144,14 @@ def inspect_bag(
             elif previous is not None and sequence <= previous:
                 item["sequence_gaps"] += 1
             last_sequence[topic] = sequence
+    rows = samples.execute("SELECT topic, SUM(MAX(0, ndata-nmeta)), SUM(MAX(0, nmeta-ndata)) FROM "
+                           "(SELECT topic, stamp, SUM(data) ndata, SUM(metadata) nmeta FROM samples GROUP BY topic, stamp) GROUP BY topic")
+    for topic, missing, orphaned in rows:
+        if topic in statistics and (topic.startswith(("/raw/", "/command/"))
+                                    and not topic.endswith(("/tcp_pose", "/tcp_target"))):
+            statistics[topic]["metadata_missing"] = missing
+            statistics[topic]["metadata_orphans"] = orphaned
+    samples.close()
     for item in statistics.values():
         duration_ns = (
             0
@@ -118,7 +168,9 @@ def inspect_bag(
 def validate_episode(
     episode_directory,
     required_topics=(
-        "/raw/pico/frame",
+        "/raw/pico/poses",
+        "/raw/pico/joy",
+        "/raw/pico/status",
         "/raw/marvin/joint_state",
         "/command/marvin/joint_target",
     ),
@@ -207,6 +259,9 @@ def validate_episode(
                 or item["source_time_regressions"]
                 or item["sequence_gaps"]
                 or item.get("steady_alignment_errors", 0)
+                or item.get("metadata_missing", 0)
+                or item.get("metadata_orphans", 0)
+                or item.get("decode_errors", 0)
             ):
                 degraded.append(f"{bag_name}:{topic}")
     files = {

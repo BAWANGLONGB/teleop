@@ -49,22 +49,30 @@ def verify(path):
         reader = make_reader(stream, validate_crcs=True)
         for schema, channel, message in reader.iter_messages():
             counts[channel.topic] += 1
-            if schema.name in ("foxglove.CompressedImage", "foxglove.CompressedVideo"):
-                image_type = CompressedImage if schema.name.endswith("CompressedImage") else CompressedVideo
-                value = image_type.FromString(message.data)
-                if value.timestamp.ToNanoseconds() != message.log_time:
+            if schema.name in ("foxglove.CompressedImage", "foxglove.CompressedVideo", "sensor_msgs/msg/CompressedImage"):
+                if schema.name == "sensor_msgs/msg/CompressedImage":
+                    from sensor_msgs.msg import CompressedImage as RosImage
+                    from rclpy.serialization import deserialize_message
+                    from xr_marvin_teleop.ros.protocol import stamp_ns
+                    value = deserialize_message(message.data, RosImage)
+                    timestamp = stamp_ns(value)
+                else:
+                    image_type = CompressedImage if schema.name.endswith("CompressedImage") else CompressedVideo
+                    value = image_type.FromString(message.data)
+                    timestamp = value.timestamp.ToNanoseconds()
+                if timestamp != message.log_time:
                     raise ValueError("image and MCAP timestamps differ")
                 codec = "mjpeg" if value.format == "jpeg" else "h264"
                 if channel.topic not in decoders:
                     decoders[channel.topic] = av.CodecContext.create(codec, "r")
                     decoders[channel.topic].thread_count = 1
-                frames = decoders[channel.topic].decode(av.Packet(value.data))
+                frames = decoders[channel.topic].decode(av.Packet(bytes(value.data)))
                 if len(frames) != 1:
                     raise ValueError("video message does not decode to exactly one frame")
                 if codec == "h264":
                     if frames[0].pict_type == av.video.frame.PictureType.B:
                         raise ValueError("B frame in output")
-                    if 5 in h264_nal_types(value.data):
+                    if 5 in h264_nal_types(bytes(value.data)):
                         independent = av.CodecContext.create("h264", "r")
                         independent.thread_count = 1
                         if len(independent.decode(av.Packet(value.data))) != 1:

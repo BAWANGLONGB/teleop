@@ -50,6 +50,7 @@ async function loadSessions(selected) {
   select.replaceChildren(new Option("默认：按日期分组", ""), ...sessionRecords.map(s => new Option(`${s.name} (${s.id})`, s.id)));
   select.value = sessionRecords.some(s => s.id === wanted) ? wanted : "";
   $("#sessionName").value = sessionRecords.find(s => s.id === select.value)?.name || "";
+  updateDatasetCount();
 }
 
 async function saveSessionName(create) {
@@ -496,6 +497,15 @@ const episodeStates = {
   recording: ["采集中", "review"], aborted: ["已中止", "rejected"],
 };
 
+function updateDatasetCount() {
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const session = (lastCollection.active && lastCollection.session)
+    || $("#collectionSession").value || `session_${today}`;
+  $("#datasetCount").textContent = episodeRecords.filter(episode => episode.session === session).length;
+  $("#datasetCount").title = `当前 Session：${session}`;
+}
+
 function renderEpisodes(episodes) {
   episodeRecords = episodes;
   const selectedSession = $("#sessionFilter").value;
@@ -514,7 +524,7 @@ function renderEpisodes(episodes) {
     const operator = String(episode.operator ?? "—");
     return `<tr data-episode="${escapeHTML(episode.id)}"><td><b>EP · ${escapeHTML(episode.id.slice(-8))}</b><small>${escapeHTML(date)}</small></td><td>${escapeHTML(episode.task)}</td><td><span class="mini-avatar">${escapeHTML(operator.slice(0, 1).toUpperCase())}</span>${escapeHTML(operator)}</td><td>${formatDuration(episode.duration_seconds)}</td><td>${formatSize(episode.size_bytes)}</td><td><span class="table-status ${state[1]}">${escapeHTML(state[0])}</span></td><td><button class="row-more" aria-label="查看详情"><svg><use href="#i-more"/></svg></button></td></tr>`;
   }).join("") || '<tr><td colspan="7">暂无采集数据</td></tr>';
-  $("#datasetCount").textContent = episodes.length;
+  updateDatasetCount();
   const bytes = episodes.reduce((total, item) => total + item.size_bytes, 0);
   $("#datasetSummary").textContent = `共 ${episodes.length} 段 · ${formatSize(bytes)}`;
   filterEpisodes();
@@ -823,6 +833,7 @@ $("#renameSession").addEventListener("click", () => saveSessionName(false));
 $("#collectionSession").addEventListener("change", () => {
   $("#sessionName").value = sessionRecords.find(s => s.id === $("#collectionSession").value)?.name || "";
   localStorage.setItem("fieldnote-session", $("#collectionSession").value);
+  updateDatasetCount();
 });
 $("#reviewEpisode").addEventListener("change", renderReviewControls);
 $("#collectionForm").addEventListener("input", () => syncHotkeySettings().catch(error => showToast(`手柄参数同步失败：${error.message}`)));

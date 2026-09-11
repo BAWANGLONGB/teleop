@@ -3,8 +3,11 @@
 import queue
 import threading
 import time
+import uuid
 
 import numpy as np
+from .protocol import (JOINT_NAMES, GRIPPER_NAMES, PICO_TOPICS, joint_state, trajectory,
+                       pico_messages, tactile_grid, sample_status, status_topic, stamp)
 
 
 ARM_NAMES = ("left", "right")
@@ -16,8 +19,9 @@ class Ros2DataBridge:
     def __init__(
         self,
         node_name="marvin_data_bridge",
-        gripper_command_callback=None,
         publish_gripper_commands=True,
+        gripper_configurations=None,
+        pico_timing=None,
     ):
         try:
             import rclpy
@@ -29,18 +33,13 @@ class Ros2DataBridge:
                 QoSProfile,
                 ReliabilityPolicy,
             )
-            from teleop_msgs.msg import (
-                DasState,
-                GripperCommand,
-                ImageFrame,
-                JointCommand,
-                MarvinState,
-                PicoFrame,
-                TactileFrame,
-            )
+            from geometry_msgs.msg import PoseArray
+            from sensor_msgs.msg import JointState, Joy, Image
+            from trajectory_msgs.msg import JointTrajectory
+            from foxglove_msgs.msg import Grid
         except (ImportError, OSError) as error:
             raise RuntimeError(
-                "ROS2 collection requires a sourced teleop_msgs workspace; "
+                "ROS2 collection requires sourced ROS2 and foxglove_msgs; "
                 "do not preload the system libstdc++ into Conda"
             ) from error
 
@@ -57,18 +56,15 @@ class Ros2DataBridge:
             durability=DurabilityPolicy.VOLATILE,
         )
         self._rclpy = rclpy
+        self._pico_timing = pico_timing
         self._node_name = str(node_name)
+        self._session = uuid.uuid4().hex
+        self.gripper_configurations = gripper_configurations
         self._types = {
             "DiagnosticArray": DiagnosticArray,
             "DiagnosticStatus": DiagnosticStatus,
             "KeyValue": KeyValue,
-            "PicoFrame": PicoFrame,
-            "MarvinState": MarvinState,
-            "JointCommand": JointCommand,
-            "GripperCommand": GripperCommand,
-            "DasState": DasState,
-            "TactileFrame": TactileFrame,
-            "ImageFrame": ImageFrame,
+            "Image": Image,
         }
         self._owns_context = not rclpy.ok()
         if self._owns_context:
@@ -82,51 +78,47 @@ class Ros2DataBridge:
 
         self._publishers = {
             "pico": self._node.create_publisher(
-                PicoFrame, "/raw/pico/frame", sensor_qos
+                PoseArray, PICO_TOPICS[0], sensor_qos
             ),
+            "joy": self._node.create_publisher(Joy, PICO_TOPICS[1], sensor_qos),
             "marvin": self._node.create_publisher(
-                MarvinState, "/raw/marvin/joint_state", critical_qos
+                JointState, "/raw/marvin/joint_state", critical_qos
             ),
             "joint_command": self._node.create_publisher(
-                JointCommand, "/command/marvin/joint_target", critical_qos
+                JointTrajectory, "/command/marvin/joint_target", critical_qos
             ),
         }
         if publish_gripper_commands:
             self._publishers["gripper_command"] = self._node.create_publisher(
-                GripperCommand, "/command/das/target", critical_qos
+                JointTrajectory, "/command/das/target", critical_qos
             )
-        self._gripper_command_callback = gripper_command_callback
-        self._gripper_command_subscription = (
-            None
-            if gripper_command_callback is None
-            else self._node.create_subscription(
-                GripperCommand,
-                "/command/das/target",
-                self._handle_gripper_command,
-                critical_qos,
-            )
-        )
         self._das_publishers = tuple(
             self._node.create_publisher(
-                DasState, f"/raw/das/{side}/state", critical_qos
+                JointState, f"/raw/das/{side}/state", critical_qos
             )
             for side in ARM_NAMES
         )
         self._tactile_publishers = tuple(
             self._node.create_publisher(
-                TactileFrame, f"/raw/das/{side}/tactile", sensor_qos
+                Grid, f"/raw/das/{side}/tactile", sensor_qos
             )
             for side in ARM_NAMES
         )
         self._camera_publishers = tuple(
             self._node.create_publisher(
-                ImageFrame, f"/raw/das/{side}/image", sensor_qos
+                Image, f"/raw/das/{side}/image", sensor_qos
             )
             for side in ARM_NAMES
         )
         self._diagnostic_publisher = self._node.create_publisher(
             DiagnosticArray, "/diagnostics", critical_qos
         )
+        topics = [PICO_TOPICS[0], "/raw/marvin/joint_state", "/command/marvin/joint_target",
+                  "/command/das/target", *(f"/raw/das/{side}/{kind}" for side in ARM_NAMES
+                                          for kind in ("state", "tactile", "image"))]
+        self._status_publishers = {topic: self._node.create_publisher(
+            DiagnosticArray, status_topic(topic), sensor_qos if topic == PICO_TOPICS[0]
+            or topic.endswith(("tactile", "image")) else critical_qos) for topic in topics}
         self._critical_queue = queue.Queue(maxsize=512)
         self._tactile_queues = tuple(queue.Queue(maxsize=64) for _ in ARM_NAMES)
         self._camera_queues = tuple(queue.Queue(maxsize=2) for _ in ARM_NAMES)
@@ -207,7 +199,7 @@ class Ros2DataBridge:
         )
 
     def publish_gripper_command(self, closedness, wall_time_ns=None, steady_ns=None):
-        if "gripper_command" not in self._publishers:
+        if "gripper_command" not in self._publishers or self.gripper_configurations is None:
             return
         wall_time_ns = time.time_ns() if wall_time_ns is None else int(wall_time_ns)
         steady_ns = time.monotonic_ns() if steady_ns is None else int(steady_ns)
@@ -216,19 +208,12 @@ class Ros2DataBridge:
             (
                 "gripper_command",
                 self._next_sequence("gripper_command"),
-                tuple(float(value) for value in closedness),
+                [1.0 - value for value in closedness],
                 wall_time_ns,
                 steady_ns,
             ),
             "critical",
         )
-
-    def _handle_gripper_command(self, message):
-        try:
-            self._gripper_command_callback(tuple(message.closedness))
-        except Exception as error:
-            self._drop_counts["publish_error"] += 1
-            self._last_error = str(error)
 
     def publish_das_state(self, arm_index, state):
         self._enqueue(
@@ -274,102 +259,71 @@ class Ros2DataBridge:
         )
         self._image_available.set()
 
-    @staticmethod
-    def _stamp(header, wall_time_ns, frame_id):
-        header.stamp.sec, header.stamp.nanosec = divmod(
-            int(wall_time_ns), 1_000_000_000
-        )
-        header.frame_id = frame_id
+    _stamp = staticmethod(stamp)
+
+    def _sample_status(self, topics, sequence, wall, steady, **values):
+        self._status_publishers[topics[0]].publish(
+            sample_status(topics, wall, self._session, sequence, steady, **values))
 
     def _publish_critical(self, item):
         kind = item[0]
-        message = self._types[
-            {
-                "pico": "PicoFrame",
-                "marvin": "MarvinState",
-                "joint_command": "JointCommand",
-                "gripper_command": "GripperCommand",
-                "das": "DasState",
-            }[kind]
-        ]()
         if kind == "das":
             _, sequence_id, arm_index, state = item
-            self._stamp(
-                message.header,
-                state["wall_time_ns"],
-                f"finger_{ARM_NAMES[arm_index]}",
-            )
-            message.sequence_id = sequence_id
-            message.source_timestamp_ns = int(state.get("source_timestamp_ns", 0))
-            message.receive_steady_ns = int(state["steady_ns"])
-            message.valid = bool(state.get("valid", True))
-            message.side = ARM_NAMES[arm_index]
-            message.distance_m = float(state["distance_m"])
-            message.target_distance_m = float(state["target_distance_m"])
-            message.status_flags = int(state.get("status_flags", 0))
+            message = joint_state([state["distance_m"]], [GRIPPER_NAMES[arm_index]], state["wall_time_ns"])
             self._das_publishers[arm_index].publish(message)
+            self._sample_status([f"/raw/das/{ARM_NAMES[arm_index]}/state"], sequence_id,
+                                state["wall_time_ns"], state["steady_ns"],
+                                valid=bool(state.get("valid", True)),
+                                target_distance_m=float(state["target_distance_m"]),
+                                status_flags=int(state.get("status_flags", 0)))
             return
 
         _, sequence_id, payload, wall_time_ns, steady_ns = item
-        frame_id = "openxr_local" if kind == "pico" else "marvin_base"
-        self._stamp(message.header, wall_time_ns, frame_id)
-        message.sequence_id = sequence_id
+        publish_start_ns = time.monotonic_ns()
+        metadata = {}
         if kind == "pico":
-            message.source_timestamp_ns = 0 if payload is None else payload.timestamp_ns
-            message.receive_steady_ns = steady_ns
-            message.valid = payload is not None
-            message.left_controller_pose = [float("nan")] * 7 if payload is None else payload.left_controller_pose.tolist()
-            message.right_controller_pose = [float("nan")] * 7 if payload is None else payload.right_controller_pose.tolist()
-            message.grip_values = [float("nan")] * 2 if payload is None else list(payload.grip_values)
-            message.trigger_values = [float("nan")] * 2 if payload is None else list(payload.trigger_values)
-            message.thumbstick_y_values = [float("nan")] * 2 if payload is None else list(payload.thumbstick_y_values)
-            message.button_a = False if payload is None else payload.button_a
-            message.button_b = False if payload is None else payload.button_b
+            message, joy = pico_messages(payload, wall_time_ns)
+            self._publishers["joy"].publish(joy)
+            topics = PICO_TOPICS
+            metadata = dict(valid=payload is not None, source_clock="openxr",
+                            source_timestamp_ns=0 if payload is None else payload.timestamp_ns)
         elif kind == "marvin":
-            message.source_timestamp_ns = 0
-            message.receive_steady_ns = steady_ns
-            message.valid = True
-            message.frame_serial = list(payload.frame_serial)
-            message.arm_state = list(payload.arm_state)
-            message.error_code = list(payload.error_code)
-            message.low_speed = list(payload.low_speed)
-            message.q_rad = payload.q_rad.tolist()
-            message.dq_rad_s = payload.dq_rad_s.tolist()
-        elif kind == "joint_command":
-            message.issue_steady_ns = steady_ns
-            message.q_rad = payload.tolist()
+            message = joint_state(payload.q_rad, JOINT_NAMES, wall_time_ns, payload.dq_rad_s)
+            topics = ["/raw/marvin/joint_state"]
+            metadata = {key: list(getattr(payload, key)) for key in
+                        ("frame_serial", "arm_state", "error_code", "low_speed")}
         else:
-            message.issue_steady_ns = steady_ns
-            message.closedness = list(payload)
+            names = JOINT_NAMES if kind == "joint_command" else GRIPPER_NAMES
+            message = trajectory(payload, names, wall_time_ns)
+            topics = ["/command/marvin/joint_target" if kind == "joint_command" else "/command/das/target"]
+            metadata = dict(command=True)
         self._publishers[kind].publish(message)
+        self._sample_status(topics, sequence_id, wall_time_ns, steady_ns, **metadata)
+        if kind == "pico" and self._pico_timing is not None:
+            self._pico_timing.record("publish", identity=dict(
+                publisher_session_id=self._session, sequence_id=sequence_id, stamp_ns=wall_time_ns,
+                source_timestamp_ns=metadata["source_timestamp_ns"], enqueue_ns=steady_ns,
+                publish_start_ns=publish_start_ns, publish_end_ns=time.monotonic_ns()),
+                queue_ns=publish_start_ns - steady_ns, duration_ns=time.monotonic_ns() - publish_start_ns)
 
     def _publish_tactile(self, arm_index, item):
         sequence_id, raw_data, wall_time_ns, steady_ns = item
-        message = self._types["TactileFrame"]()
-        self._stamp(message.header, wall_time_ns, f"finger_{ARM_NAMES[arm_index]}")
-        message.sequence_id = sequence_id
-        message.source_timestamp_ns = 0
-        message.receive_steady_ns = steady_ns
-        message.valid = True
-        message.side = ARM_NAMES[arm_index]
-        message.data = raw_data
+        message = tactile_grid(raw_data, ARM_NAMES[arm_index], wall_time_ns)
         self._tactile_publishers[arm_index].publish(message)
+        self._sample_status([f"/raw/das/{ARM_NAMES[arm_index]}/tactile"], sequence_id, wall_time_ns, steady_ns)
 
     def _publish_camera(self, arm_index, item):
         sequence_id, frame, wall_time_ns, steady_ns = item
-        message = self._types["ImageFrame"]()
-        image = message.image
-        self._stamp(image.header, wall_time_ns, f"finger_{ARM_NAMES[arm_index]}")
+        image = self._types["Image"]()
+        self._stamp(image.header, wall_time_ns, f"das_{ARM_NAMES[arm_index]}_camera_optical_frame")
         image.height, image.width = frame.shape[:2]
         channels = 1 if frame.ndim == 2 else frame.shape[2]
         image.encoding = {1: "mono8", 3: "bgr8", 4: "bgra8"}[channels]
         image.is_bigendian = 0
         image.step = image.width * channels
         image.data = frame.tobytes()
-        message.sequence_id = sequence_id
-        message.source_timestamp_ns = 0
-        message.receive_steady_ns = steady_ns
-        self._camera_publishers[arm_index].publish(message)
+        self._camera_publishers[arm_index].publish(image)
+        self._sample_status([f"/raw/das/{ARM_NAMES[arm_index]}/image"], sequence_id, wall_time_ns, steady_ns)
 
     def _publish_diagnostics(self):
         message = self._types["DiagnosticArray"]()
@@ -402,8 +356,6 @@ class Ros2DataBridge:
         while not self._stop_event.is_set() or any(
             not target_queue.empty() for target_queue in queues
         ):
-            if self._gripper_command_subscription is not None:
-                self._rclpy.spin_once(self._node, timeout_sec=0.0)
             try:
                 self._publish_safely(
                     self._publish_critical, self._critical_queue.get_nowait()

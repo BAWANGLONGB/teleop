@@ -23,8 +23,9 @@ DEFAULT_CONTROL_HZ = 50
 DEFAULT_JOINT_VELOCITY_RATIO = 10
 DEFAULT_JOINT_ACCELERATION_RATIO = 10
 MAX_CONSECUTIVE_STALE_FEEDBACK_CYCLES = 3
-DEFAULT_GRIPPER_RATE = 1.0
+DEFAULT_GRIPPER_RATE = 2.0
 DEFAULT_GRIPPER_COMMAND_HZ = 20.0
+DEFAULT_GRIPPER_MODE = "binary"
 DEFAULT_NSP_ANGLE_RATE_DEG_S = 15.0
 DEFAULT_NSP_LATERAL_MAX_ANGLE_DEG = 5.0
 DEFAULT_NSP_LATERAL_DEADZONE_M = 0.03
@@ -59,6 +60,7 @@ class MarvinHardwareTeleopController:
         telemetry_publisher=None,
         gripper_control_enabled=False,
         initial_gripper_closedness=(0.0, 0.0),
+        gripper_mode=DEFAULT_GRIPPER_MODE,
         gripper_rate=DEFAULT_GRIPPER_RATE,
         gripper_command_hz=DEFAULT_GRIPPER_COMMAND_HZ,
         trigger_deadzone=0.08,
@@ -91,6 +93,8 @@ class MarvinHardwareTeleopController:
             raise ValueError("settle durations must be non-negative")
         gripper_rate = float(gripper_rate)
         gripper_command_hz = float(gripper_command_hz)
+        if gripper_mode not in ("binary", "continuous"):
+            raise ValueError("gripper_mode must be binary or continuous")
         if not np.isfinite(gripper_rate) or gripper_rate <= 0.0:
             raise ValueError("gripper_rate must be positive")
         if (
@@ -213,6 +217,7 @@ class MarvinHardwareTeleopController:
         self.session_logger = session_logger
         self.telemetry_publisher = telemetry_publisher
         self.gripper_control_enabled = bool(gripper_control_enabled)
+        self.gripper_mode = gripper_mode
         self.gripper_rate = gripper_rate
         self.gripper_command_period_seconds = 1.0 / gripper_command_hz
         self.trigger_deadzone = float(trigger_deadzone)
@@ -231,6 +236,7 @@ class MarvinHardwareTeleopController:
         self._nsp_lateral_anchors = [None, None]
         self._last_nsp_update_time = None
         self._gripper_closedness = initial_gripper_closedness.copy()
+        self._gripper_binary_target = initial_gripper_closedness.copy()
         self._last_sent_gripper_closedness = initial_gripper_closedness.copy()
         self._last_gripper_update_time = None
         self._last_gripper_command_time = None
@@ -346,6 +352,7 @@ class MarvinHardwareTeleopController:
                         "gripper adapter returned invalid initial closedness"
                     )
                 self._gripper_closedness[:] = measured_closedness
+                self._gripper_binary_target[:] = measured_closedness
                 self._last_sent_gripper_closedness[:] = measured_closedness
         actual_sdk_version = self.adapter.sdk_version()
         if (
@@ -576,7 +583,7 @@ class MarvinHardwareTeleopController:
     ):
         if not self.gripper_control_enabled:
             return
-        if reset_requested:
+        if reset_requested and self.gripper_mode != "binary":
             # B also closes enabled grippers; arm return and gripper reset are coupled.
             self._gripper_closedness.fill(1.0)
             self._last_gripper_update_time = cycle_time_seconds
@@ -601,7 +608,17 @@ class MarvinHardwareTeleopController:
             open_input = self._deadzone(
                 max(stick_y, 0.0), self.thumbstick_deadzone
             )
-            if close_input > 0.0:
+            if self.gripper_mode == "binary":
+                if reset_requested or close_input > 0.0:
+                    self._gripper_binary_target[arm_index] = 1.0
+                elif open_input > 0.0:
+                    self._gripper_binary_target[arm_index] = 0.0
+                step = self.gripper_rate * elapsed_seconds
+                self._gripper_closedness[arm_index] += np.clip(
+                    self._gripper_binary_target[arm_index]
+                    - self._gripper_closedness[arm_index], -step, step
+                )
+            elif close_input > 0.0:
                 self._gripper_closedness[arm_index] += (
                     self.gripper_rate * close_input * elapsed_seconds
                 )
@@ -621,7 +638,7 @@ class MarvinHardwareTeleopController:
                 self._gripper_closedness
                 - self._last_sent_gripper_closedness
             )
-        ) < 0.01:
+        ) < (1e-12 if self.gripper_mode == "binary" else 0.01):
             return
         self._send_gripper_command(cycle_time_seconds)
 

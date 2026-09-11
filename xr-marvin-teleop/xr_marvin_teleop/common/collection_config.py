@@ -25,7 +25,7 @@ ARG_FIELDS = {
     "calibration": ("paths", "calibrations"), "urdf": ("paths", "urdf"),
     "robot_model": ("robot", "model"), "robot_ip": ("robot", "ip"),
     **{name: ("robot", name) for name in (
-        "thumbstick_y_sign", "scale_factor", "nsp_lateral", "nsp_max_angle", "nsp_angle_rate",
+        "thumbstick_y_sign", "gripper_mode", "scale_factor", "nsp_lateral", "nsp_max_angle", "nsp_angle_rate",
         "nsp_lateral_deadzone", "nsp_lateral_range", "nsp_lateral_sign_left", "nsp_lateral_sign_right")},
     "no_vision": ("capture", "vision_enabled"), "max_duration": ("capture", "max_duration_s"),
     "pico_poll_hz": ("capture", "pico_poll_hz"), "preview_root": ("preview", "root"),
@@ -41,7 +41,7 @@ CONFIG_SCHEMA = {
     "schema_version": int,
     "paths": {key: list if key == "calibrations" else str for key in PATH_FIELDS["paths"]},
     "robot": {
-        "model": str, "ip": str, "thumbstick_y_sign": int, "scale_factor": None,
+        "model": str, "ip": str, "thumbstick_y_sign": int, "gripper_mode": str, "scale_factor": None,
         "nsp_lateral": bool, "nsp_max_angle": float, "nsp_angle_rate": float,
         "nsp_lateral_deadzone": float, "nsp_lateral_range": float,
         "nsp_lateral_sign_left": int, "nsp_lateral_sign_right": int,
@@ -169,7 +169,9 @@ def validate_config(config):
         for topic in topics
     ) or len(topics) != len(set(topics)):
         raise ValueError("state_topics must be unique absolute ROS topic names")
-    required = {"/raw/pico/frame", "/raw/marvin/joint_state", "/command/marvin/joint_target"}
+    required = {"/raw/pico/poses", "/raw/pico/joy", "/raw/pico/status",
+                "/raw/marvin/joint_state", "/raw/marvin/joint_state/status",
+                "/command/marvin/joint_target", "/command/marvin/joint_target/status"}
     if not required.issubset(topics):
         raise ValueError("state_topics must include PICO, Marvin feedback and joint commands")
     robot = config["robot"]
@@ -178,6 +180,8 @@ def validate_config(config):
     for name in ("thumbstick_y_sign", "nsp_lateral_sign_left", "nsp_lateral_sign_right"):
         if robot[name] not in (-1, 1):
             raise ValueError(f"{name} must be -1 or 1")
+    if robot["gripper_mode"] not in ("binary", "continuous"):
+        raise ValueError("gripper_mode must be binary or continuous")
     number(robot["nsp_max_angle"], "nsp_max_angle", 1e-9, 30)
     number(robot["nsp_angle_rate"], "nsp_angle_rate", 1e-9, 1e9)
     number(robot["nsp_lateral_deadzone"], "nsp_lateral_deadzone", 0, 1e9)

@@ -102,7 +102,9 @@ xr-marvin-teleop/
 | `common/episode_video.py` | 离线 Foxglove MJPEG/H.264 双 MCAP 导出、编码参数和采集互斥锁 |
 | `common/episode_validator.py` | 离线检查 MCAP 话题、频率、时间回退、序号缺口和文件哈希 |
 | `common/episode_package.py` | 旧 LeRobot MCAP 的附件读写、CRC 校验和安全解包；供历史文件与 UI 使用 |
-| `ros2_ws/src/teleop_msgs` | 各原始数据流和命令的 ROS2 消息定义 |
+| `ros2_ws/src/teleop_msgs` | 仅为旧 Episode 离线迁移保留；新采集使用标准 ROS2 / Foxglove 类型 |
+| `ros/protocol.py` | v2 消息构造、采样诊断、关节名映射与有界精确配对 |
+| `scripts/data/migrate_messages_v2.py` | 将旧 teleop_msgs 原始 Episode 复制迁移到新目录 |
 | `simulation/marvin_mujoco_adapter.py` | 用 MuJoCo 实现与硬件适配器相同的最小控制接口 |
 | `scripts/hardware/...` | 实机确认参数、DAS 独立标定、依赖组装和启动入口 |
 | `scripts/data/...` | supervisor、PICO/DAS 发布、原生 MJPEG 写盘、完整 MCAP 后处理与校验入口 |
@@ -225,7 +227,7 @@ XR 暂时失效的周期仍记录保持目标，XR 输入字段为 `null`。完�
 | `logs/*.jsonl` | 运行调试/回放日志，Git 忽略；确认不再排障或回放后可归档 |
 | `dataset/` | 采集原件、配置快照与最终 MCAP，Git 忽略；不属于代码清理对象 |
 | `dataset/**/final/` | 离线导出结果，不覆盖已存在目录；重新导出前先移走旧结果 |
-| `ros2_ws/build/`、`install/`、`log/` | colcon 生成内容，Git 忽略；`install/` 在运行时仍需 source |
+| `ros2_ws/build/`、`install/`、`log/` | 旧消息包 colcon 生成内容，Git 忽略；仅旧数据迁移需 source |
 
 新采集的唯一最终导出入口是 `scripts/data/postprocess_episode.py`，输出 Foxglove MJPEG/H.264 MCAP。
 旧 `package_episode()` 自动转 Parquet/MP4 并删除原始目录的流程已移除；附件工具继续服务历史文件及 UI。
