@@ -12,8 +12,8 @@ import numpy as np
 
 from xr_marvin_teleop.common.episode_postprocessor import (
     UrdfForwardKinematics,
-    _matrix_rpy,
-    _rpy_matrix,
+    matrix_rpy,
+    rpy_matrix,
     _topic_time_ns,
 )
 from xr_marvin_teleop.common.episode_package import (
@@ -259,9 +259,9 @@ class TestEpisodePostprocessor(unittest.TestCase):
         np.testing.assert_allclose(
             right[:3, 3], (-0.121134603, 0.218600006, -0.764988473), atol=3e-5
         )
-        rotation = _rpy_matrix((0.4, -0.3, 1.2))
+        rotation = rpy_matrix((0.4, -0.3, 1.2))
         np.testing.assert_allclose(
-            _rpy_matrix(_matrix_rpy(rotation)), rotation, atol=1e-12
+            rpy_matrix(matrix_rpy(rotation)), rotation, atol=1e-12
         )
 
         message = SimpleNamespace(receive_steady_ns=123, issue_steady_ns=0)

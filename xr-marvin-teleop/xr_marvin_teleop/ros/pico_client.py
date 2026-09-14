@@ -6,7 +6,7 @@ import time
 from xr_marvin_teleop.common.xr_client import XrSnapshot
 from xr_marvin_teleop.common.pico_timing import PicoTimingLog
 from . import spin_until_stopped
-from .protocol import SampleJoiner, pose_values, stamp_ns
+from .protocol import PICO_TOPIC_PREFIX, SampleJoiner, pose_values, stamp_ns
 
 
 class RosPicoClient:
@@ -14,7 +14,7 @@ class RosPicoClient:
 
     def __init__(
         self,
-        topic="/raw/pico",
+        topic=PICO_TOPIC_PREFIX,
         max_age_seconds=0.2,
         disconnect_timeout_seconds=2.0,
     ):

@@ -13,7 +13,15 @@ import numpy as np
 
 from .collection_config import write_json
 from .episode_validator import sha256_file
-from xr_marvin_teleop.ros.protocol import JOINT_NAMES, joint_positions
+from xr_marvin_teleop.ros.protocol import (
+    DIAGNOSTICS_TOPIC,
+    JOINT_NAMES,
+    MARVIN_JOINT_COMMAND_TOPIC,
+    MARVIN_JOINT_STATE_TOPIC,
+    MARVIN_TCP_COMMAND_TOPICS,
+    MARVIN_TCP_STATE_TOPICS,
+    joint_positions,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -22,18 +30,12 @@ DEFAULT_STORAGE_CONFIG = (
     PROJECT_ROOT / "config" / "data_collection" / "mcap_vision.yaml"
 )
 DERIVED_TOPICS = {
-    "/raw/marvin/joint_state": (
-        "/raw/marvin/left/tcp_pose",
-        "/raw/marvin/right/tcp_pose",
-    ),
-    "/command/marvin/joint_target": (
-        "/command/marvin/left/tcp_target",
-        "/command/marvin/right/tcp_target",
-    ),
+    MARVIN_JOINT_STATE_TOPIC: MARVIN_TCP_STATE_TOPICS,
+    MARVIN_JOINT_COMMAND_TOPIC: MARVIN_TCP_COMMAND_TOPICS,
 }
 
 
-def _rpy_matrix(rpy):
+def rpy_matrix(rpy):
     roll, pitch, yaw = rpy
     cr, sr = math.cos(roll), math.sin(roll)
     cp, sp = math.cos(pitch), math.sin(pitch)
@@ -49,7 +51,7 @@ def _rpy_matrix(rpy):
 
 def _transform(xyz, rpy):
     result = np.eye(4)
-    result[:3, :3] = _rpy_matrix(rpy)
+    result[:3, :3] = rpy_matrix(rpy)
     result[:3, 3] = xyz
     return result
 
@@ -81,7 +83,7 @@ def _axis_angle(axis, angle):
     return result
 
 
-def _matrix_rpy(rotation):
+def matrix_rpy(rotation):
     horizontal = math.hypot(rotation[0, 0], rotation[1, 0])
     pitch = math.atan2(-rotation[2, 0], horizontal)
     if horizontal > 1e-9:
@@ -172,7 +174,7 @@ def _header_time_ns(message):
 
 def _topic_time_ns(topic, message, bag_time_ns):
     """Use acquisition wall time, except diagnostics whose publishers may interleave."""
-    if topic == "/diagnostics":
+    if topic == DIAGNOSTICS_TOPIC:
         return int(bag_time_ns), "bag_time_ns"
     # Keep acquisition wall time, never reconstruct it from a monotonic clock.
     header_time_ns = _header_time_ns(message)
@@ -209,59 +211,22 @@ def _pose_message(message_type, source_message, transform):
     return result
 
 
-def postprocess_episode(
-    episode_directory,
-    output_path=None,
-    urdf_path=DEFAULT_URDF,
-    storage_config_path=DEFAULT_STORAGE_CONFIG,
-):
-    """Copy state/vision streams into one MCAP and append derived TCP streams."""
-    try:
-        import rosbag2_py
-        from rclpy.serialization import deserialize_message, serialize_message
-        from rosidl_runtime_py.utilities import get_message
-        from geometry_msgs.msg import PoseStamped
-    except (ImportError, OSError) as error:
-        raise RuntimeError(
-            "post-processing requires sourced ROS2 and foxglove_msgs"
-        ) from error
-
-    episode_directory = Path(episode_directory).expanduser().resolve()
-    metadata_path = episode_directory / "metadata.json"
-    metadata = (
-        json.loads(metadata_path.read_text(encoding="utf-8"))
-        if metadata_path.is_file()
-        else {}
-    )
+def _input_bag_paths(episode_directory, metadata):
     state_path = episode_directory / "state"
     if not (state_path / "metadata.yaml").is_file():
         raise FileNotFoundError(f"state bag not found: {state_path}")
     declared_bags = metadata.get("bags")
-    bag_names = declared_bags or ["state", "vision"]
     input_paths = []
-    for bag_name in bag_names:
+    for bag_name in declared_bags or ["state", "vision"]:
         input_path = episode_directory / bag_name
         if (input_path / "metadata.yaml").is_file():
             input_paths.append(input_path)
         elif declared_bags or bag_name == "state":
             raise FileNotFoundError(f"declared input bag not found: {input_path}")
-    output_path = (
-        episode_directory / "data"
-        if output_path is None
-        else Path(output_path).expanduser().resolve()
-    )
-    if output_path.exists():
-        raise FileExistsError(f"output bag already exists: {output_path}")
-    if any(
-        output_path == path or output_path.is_relative_to(path)
-        for path in input_paths
-    ):
-        raise ValueError("output bag must not be inside an input bag")
-    urdf_path = Path(urdf_path).expanduser().resolve()
-    storage_config_path = Path(storage_config_path).expanduser().resolve()
-    if not urdf_path.is_file() or not storage_config_path.is_file():
-        raise FileNotFoundError("URDF or MCAP storage configuration is missing")
+    return input_paths
 
+
+def _topic_cursors(input_paths, rosbag2_py, get_message):
     topic_metadata = {}
     topic_input_paths = {}
     for input_path in input_paths:
@@ -272,7 +237,10 @@ def postprocess_episode(
         )
         for item in reader.get_all_topics_and_types():
             if item.type.startswith("teleop_msgs/"):
-                raise ValueError("legacy teleop_msgs bag: run scripts/data/migrate_messages_v2.py first")
+                raise ValueError(
+                    "legacy teleop_msgs bag: run "
+                    "scripts/data/migrate_messages_v2.py first"
+                )
             previous = topic_metadata.get(item.name)
             if previous is not None and previous.type != item.type:
                 raise ValueError(f"topic type mismatch for {item.name}")
@@ -299,6 +267,54 @@ def postprocess_episode(
                 "message_type": message_types[topic],
             }
         )
+    return topic_metadata, cursors
+
+
+def postprocess_episode(
+    episode_directory,
+    output_path=None,
+    urdf_path=DEFAULT_URDF,
+    storage_config_path=DEFAULT_STORAGE_CONFIG,
+):
+    """Copy state/vision streams into one MCAP and append derived TCP streams."""
+    try:
+        import rosbag2_py
+        from rclpy.serialization import deserialize_message, serialize_message
+        from rosidl_runtime_py.utilities import get_message
+        from geometry_msgs.msg import PoseStamped
+    except (ImportError, OSError) as error:
+        raise RuntimeError(
+            "post-processing requires sourced ROS2 and foxglove_msgs"
+        ) from error
+
+    episode_directory = Path(episode_directory).expanduser().resolve()
+    metadata_path = episode_directory / "metadata.json"
+    metadata = (
+        json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata_path.is_file()
+        else {}
+    )
+    input_paths = _input_bag_paths(episode_directory, metadata)
+    output_path = (
+        episode_directory / "data"
+        if output_path is None
+        else Path(output_path).expanduser().resolve()
+    )
+    if output_path.exists():
+        raise FileExistsError(f"output bag already exists: {output_path}")
+    if any(
+        output_path == path or output_path.is_relative_to(path)
+        for path in input_paths
+    ):
+        raise ValueError("output bag must not be inside an input bag")
+    urdf_path = Path(urdf_path).expanduser().resolve()
+    storage_config_path = Path(storage_config_path).expanduser().resolve()
+    if not urdf_path.is_file() or not storage_config_path.is_file():
+        raise FileNotFoundError("URDF or MCAP storage configuration is missing")
+
+    topic_metadata, cursors = _topic_cursors(
+        input_paths, rosbag2_py, get_message
+    )
 
     kinematics = UrdfForwardKinematics(urdf_path)
     temporary_root = output_path.parent / f".postprocess-{uuid.uuid4().hex}"

@@ -7,7 +7,20 @@ import sqlite3
 from pathlib import Path
 
 from .collection_config import write_json
-from xr_marvin_teleop.ros.protocol import status_values, stamp_ns, status_topic
+from xr_marvin_teleop.ros.protocol import (
+    ARM_NAMES,
+    DAS_COMPRESSED_IMAGE_TOPICS,
+    DAS_IMAGE_TOPICS,
+    MARVIN_JOINT_COMMAND_TOPIC,
+    MARVIN_JOINT_STATE_TOPIC,
+    MARVIN_TCP_COMMAND_TOPICS,
+    MARVIN_TCP_STATE_TOPICS,
+    PICO_STATUS_TOPIC,
+    PICO_TOPICS,
+    stamp_ns,
+    status_topic,
+    status_values,
+)
 
 
 def sha256_file(path):
@@ -168,11 +181,10 @@ def inspect_bag(
 def validate_episode(
     episode_directory,
     required_topics=(
-        "/raw/pico/poses",
-        "/raw/pico/joy",
-        "/raw/pico/status",
-        "/raw/marvin/joint_state",
-        "/command/marvin/joint_target",
+        *PICO_TOPICS,
+        PICO_STATUS_TOPIC,
+        MARVIN_JOINT_STATE_TOPIC,
+        MARVIN_JOINT_COMMAND_TOPIC,
     ),
 ):
     episode_directory = Path(episode_directory).resolve()
@@ -227,15 +239,14 @@ def validate_episode(
     vision_topics = bags.get("vision")
     processed_vision_topics = []
     if vision_topics is not None:
-        for topic in ("/raw/das/left/image", "/raw/das/right/image"):
+        for topic in DAS_IMAGE_TOPICS:
             if vision_topics.get(topic, {}).get("count", 0) == 0:
                 errors.append(f"required vision topic has no messages: {topic}")
             processed_vision_topics.append(topic)
-    for side in ("left", "right"):
+    for side, topic in zip(ARM_NAMES, DAS_COMPRESSED_IMAGE_TOPICS):
         bag_name = f"vision_{side}"
         if bag_name not in bags:
             continue
-        topic = f"/raw/das/{side}/image/compressed"
         if bags[bag_name].get(topic, {}).get("count", 0) == 0:
             errors.append(f"required vision topic has no messages: {topic}")
         processed_vision_topics.append(topic)
@@ -243,10 +254,8 @@ def validate_episode(
         data_topics = bags.get(processed_bag, {})
         processed_required_topics = [
             *required_topics,
-            "/raw/marvin/left/tcp_pose",
-            "/raw/marvin/right/tcp_pose",
-            "/command/marvin/left/tcp_target",
-            "/command/marvin/right/tcp_target",
+            *MARVIN_TCP_STATE_TOPICS,
+            *MARVIN_TCP_COMMAND_TOPICS,
         ]
         processed_required_topics.extend(processed_vision_topics)
         for topic in processed_required_topics:

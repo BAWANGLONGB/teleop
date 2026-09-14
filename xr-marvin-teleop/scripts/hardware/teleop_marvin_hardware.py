@@ -33,6 +33,7 @@ from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     DEFAULT_NSP_LATERAL_MAX_ANGLE_DEG,
     MarvinHardwareTeleopController,
 )
+from xr_marvin_teleop.ros.protocol import PICO_TOPIC_PREFIX
 from xr_marvin_teleop.ros.telemetry_bridge import Ros2DataBridge
 from xr_marvin_teleop.ros.das_client import RosDasClient
 from xr_marvin_teleop.ros.pico_client import RosPicoClient
@@ -98,7 +99,7 @@ def parse_command_line_arguments(arguments=None):
         action="store_true",
         help="subscribe to the independent raw PICO publisher instead of opening SDK",
     )
-    parser.add_argument("--pico-topic", default="/raw/pico", help="v2 PICO topic prefix")
+    parser.add_argument("--pico-topic", default=PICO_TOPIC_PREFIX, help="v2 PICO topic prefix")
     parser.add_argument(
         "--gripper-rate", type=float, default=DEFAULT_GRIPPER_RATE
     )

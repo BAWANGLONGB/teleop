@@ -27,52 +27,22 @@ xr-marvin-teleop/
 │   ├── marvin_dual.manifest.json
 │   └── meshes/
 ├── scripts/
-│   ├── data/
-│   │   ├── capture_das_mjpeg.py
-│   │   ├── extract_episode_mcap.py
-│   │   ├── migrate_sessions.py
-│   │   ├── postprocess_episode.py
-│   │   ├── publish_das.py
-│   │   ├── publish_pico.py
-│   │   ├── record_episode.py
-│   │   ├── review_episode.py
-│   │   ├── run_collection.py
-│   │   └── validate_episode.py
-│   ├── hardware/
-│   │   ├── calibrate_das_finger.py
-│   │   ├── reset_marvin_hardware.py
-│   │   └── teleop_marvin_hardware.py
-│   └── simulation/
-│       ├── teleop_marvin_mujoco.py
-│       └── replay_marvin_log.py
+│   ├── data/                    # 采集、发布、迁移、后处理、校验与审阅入口
+│   ├── hardware/                # 实机遥操、复位和 DAS 标定入口
+│   └── simulation/              # MuJoCo 遥操与日志回放入口
 ├── tests/
-│   ├── test_collection_config.py
-│   ├── test_episode_postprocessor.py
-│   ├── test_episode_video.py
-│   ├── test_migrate_sessions.py
-│   └── test_marvin_hardware.py
+│   ├── test_marvin_controller.py
+│   ├── test_marvin_interfaces.py
+│   ├── test_marvin_ros_data.py
+│   ├── test_marvin_entrypoints.py
+│   ├── test_marvin_simulation.py
+│   └── test_*.py                # 配置、Episode、协议、迁移和 UI 回归
 └── xr_marvin_teleop/
-    ├── common/
-    │   ├── collection_config.py
-    │   ├── episode_package.py
-    │   ├── episode_postprocessor.py
-    │   ├── episode_validator.py
-    │   ├── episode_video.py
-    │   ├── marvin_postures.py
-    │   ├── marvin_scale_calibration.py
-    │   ├── marvin_session_logger.py
-    │   ├── xr_client.py
-    │   └── xr_target_mapper.py
+    ├── common/                   # 配置、XR 映射、日志和 Episode 离线处理
     ├── hardware/
     │   ├── marvin_teleop_controller.py
-    │   └── interface/
-    │       ├── das_finger.py
-    │       ├── marvin.py
-    │       └── marvin_kinematics.py
-    ├── ros/
-    │   ├── das_client.py
-    │   ├── pico_client.py
-    │   └── telemetry_bridge.py
+    │   └── interface/            # Marvin、运动学和 DAS 厂商边界
+    ├── ros/                      # 统一消息契约、客户端和遥测发布
     └── simulation/
         └── marvin_mujoco_adapter.py
 ```
@@ -110,7 +80,11 @@ xr-marvin-teleop/
 | `scripts/data/...` | supervisor、PICO/DAS 发布、原生 MJPEG 写盘、完整 MCAP 后处理与校验入口 |
 | `scripts/simulation/teleop_...` | PICO → MuJoCo 组装和启动入口 |
 | `scripts/simulation/replay_...` | JSONL command/feedback 回放入口 |
-| `tests/test_marvin_hardware.py` | 合成 XR、真实厂家 IK、SDK mock 和 headless MuJoCo 回归 |
+| `tests/test_marvin_controller.py` | 合成 XR、控制状态、IK/NSP、回位和断流回归 |
+| `tests/test_marvin_interfaces.py` | Marvin/DAS SDK 边界、配置和夹爪回归 |
+| `tests/test_marvin_ros_data.py` | ROS2 客户端、遥测线程和原始 Episode 校验回归 |
+| `tests/test_marvin_entrypoints.py` | 实机 CLI、复位和采集 supervisor 回归 |
+| `tests/test_marvin_simulation.py` | headless MuJoCo 与真实厂家 IK 集成回归 |
 | `tests/test_collection_config.py` | 配置优先级、路径解析、快照和设备配置一致性 |
 | `tests/test_episode_postprocessor.py` | 时间戳选择、URDF FK、原生 MJPEG、旧附件兼容与校验 |
 | `tests/test_episode_video.py` | 导出互斥、双 MCAP 内容、H.264 解码和失败恢复 |
@@ -132,7 +106,8 @@ PXREADeviceStateJson → native get_snapshot()
 
 Grip 松开时锁存当前反馈关节姿态并清除遥操锚点；再次按下会从新的手柄位置和
 机器人 TCP 继续。双 Grip 松开后按 B，控制器才生成返回初始姿态的 3 秒余弦
-关节轨迹；启用夹爪时 B 同时把闭合度设为 `1`。应用层没有 limiter。
+关节轨迹；启用夹爪时 B 同时把闭合度设为 `1`。Grip 遥操的 IK 关节目标经过
+可配置的每周期速度步长限制；B 回位仍按固定时长余弦轨迹执行。
 
 手柄位姿使用固定 OpenXR tracking space，不使用头显位置或朝向：OpenXR
 `-Z/+X/+Y`（前/右/上）分别映射到 Marvin `-X/+Y/+Z`。每只手第一次按下

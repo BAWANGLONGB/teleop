@@ -8,6 +8,12 @@ import threading
 import time
 from pathlib import Path
 
+from xr_marvin_teleop.ros.protocol import (
+    ARM_NAMES,
+    DAS_COMPRESSED_IMAGE_TOPICS,
+    status_topic,
+)
+
 
 PREVIEW_FPS = 30
 
@@ -133,7 +139,7 @@ class NativeMjpegWriter:
             ),
             rosbag2_py.ConverterOptions("", ""),
         )
-        self.topic = f"/raw/das/{side}/image/compressed"
+        self.topic = DAS_COMPRESSED_IMAGE_TOPICS[ARM_NAMES.index(side)]
         self._writer.create_topic(
             rosbag2_py.TopicMetadata(
                 name=self.topic,
@@ -142,7 +148,7 @@ class NativeMjpegWriter:
             )
         )
         self._writer.create_topic(rosbag2_py.TopicMetadata(
-            name=self.topic + "/status", type="diagnostic_msgs/msg/DiagnosticArray", serialization_format="cdr"))
+            name=status_topic(self.topic), type="diagnostic_msgs/msg/DiagnosticArray", serialization_format="cdr"))
 
     def _write_preview(self, payload, steady_ns):
         if (
@@ -281,7 +287,7 @@ class NativeMjpegWriter:
 
 def main(arguments=None):
     parser = argparse.ArgumentParser(description="Record native DAS MJPEG to MCAP")
-    parser.add_argument("--side", required=True, choices=("left", "right"))
+    parser.add_argument("--side", required=True, choices=ARM_NAMES)
     parser.add_argument("--device", required=True)
     parser.add_argument("--resolution", default="640x480")
     parser.add_argument("--fps", type=int, default=60)

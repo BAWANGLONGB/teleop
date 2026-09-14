@@ -6,11 +6,26 @@ import time
 import uuid
 
 import numpy as np
-from .protocol import (JOINT_NAMES, GRIPPER_NAMES, PICO_TOPICS, joint_state, trajectory,
-                       pico_messages, tactile_grid, sample_status, status_topic, stamp)
-
-
-ARM_NAMES = ("left", "right")
+from .protocol import (
+    ARM_NAMES,
+    DAS_COMMAND_TOPIC,
+    DAS_IMAGE_TOPICS,
+    DAS_STATE_TOPICS,
+    DAS_TACTILE_TOPICS,
+    DIAGNOSTICS_TOPIC,
+    GRIPPER_NAMES,
+    JOINT_NAMES,
+    MARVIN_JOINT_COMMAND_TOPIC,
+    MARVIN_JOINT_STATE_TOPIC,
+    PICO_TOPICS,
+    joint_state,
+    pico_messages,
+    sample_status,
+    stamp,
+    status_topic,
+    tactile_grid,
+    trajectory,
+)
 
 
 class Ros2DataBridge:
@@ -82,40 +97,40 @@ class Ros2DataBridge:
             ),
             "joy": self._node.create_publisher(Joy, PICO_TOPICS[1], sensor_qos),
             "marvin": self._node.create_publisher(
-                JointState, "/raw/marvin/joint_state", critical_qos
+                JointState, MARVIN_JOINT_STATE_TOPIC, critical_qos
             ),
             "joint_command": self._node.create_publisher(
-                JointTrajectory, "/command/marvin/joint_target", critical_qos
+                JointTrajectory, MARVIN_JOINT_COMMAND_TOPIC, critical_qos
             ),
         }
         if publish_gripper_commands:
             self._publishers["gripper_command"] = self._node.create_publisher(
-                JointTrajectory, "/command/das/target", critical_qos
+                JointTrajectory, DAS_COMMAND_TOPIC, critical_qos
             )
         self._das_publishers = tuple(
-            self._node.create_publisher(
-                JointState, f"/raw/das/{side}/state", critical_qos
-            )
-            for side in ARM_NAMES
+            self._node.create_publisher(JointState, topic, critical_qos)
+            for topic in DAS_STATE_TOPICS
         )
         self._tactile_publishers = tuple(
-            self._node.create_publisher(
-                Grid, f"/raw/das/{side}/tactile", sensor_qos
-            )
-            for side in ARM_NAMES
+            self._node.create_publisher(Grid, topic, sensor_qos)
+            for topic in DAS_TACTILE_TOPICS
         )
         self._camera_publishers = tuple(
-            self._node.create_publisher(
-                Image, f"/raw/das/{side}/image", sensor_qos
-            )
-            for side in ARM_NAMES
+            self._node.create_publisher(Image, topic, sensor_qos)
+            for topic in DAS_IMAGE_TOPICS
         )
         self._diagnostic_publisher = self._node.create_publisher(
-            DiagnosticArray, "/diagnostics", critical_qos
+            DiagnosticArray, DIAGNOSTICS_TOPIC, critical_qos
         )
-        topics = [PICO_TOPICS[0], "/raw/marvin/joint_state", "/command/marvin/joint_target",
-                  "/command/das/target", *(f"/raw/das/{side}/{kind}" for side in ARM_NAMES
-                                          for kind in ("state", "tactile", "image"))]
+        topics = [
+            PICO_TOPICS[0],
+            MARVIN_JOINT_STATE_TOPIC,
+            MARVIN_JOINT_COMMAND_TOPIC,
+            DAS_COMMAND_TOPIC,
+            *DAS_STATE_TOPICS,
+            *DAS_TACTILE_TOPICS,
+            *DAS_IMAGE_TOPICS,
+        ]
         self._status_publishers = {topic: self._node.create_publisher(
             DiagnosticArray, status_topic(topic), sensor_qos if topic == PICO_TOPICS[0]
             or topic.endswith(("tactile", "image")) else critical_qos) for topic in topics}
@@ -271,7 +286,7 @@ class Ros2DataBridge:
             _, sequence_id, arm_index, state = item
             message = joint_state([state["distance_m"]], [GRIPPER_NAMES[arm_index]], state["wall_time_ns"])
             self._das_publishers[arm_index].publish(message)
-            self._sample_status([f"/raw/das/{ARM_NAMES[arm_index]}/state"], sequence_id,
+            self._sample_status([DAS_STATE_TOPICS[arm_index]], sequence_id,
                                 state["wall_time_ns"], state["steady_ns"],
                                 valid=bool(state.get("valid", True)),
                                 target_distance_m=float(state["target_distance_m"]),
@@ -289,13 +304,17 @@ class Ros2DataBridge:
                             source_timestamp_ns=0 if payload is None else payload.timestamp_ns)
         elif kind == "marvin":
             message = joint_state(payload.q_rad, JOINT_NAMES, wall_time_ns, payload.dq_rad_s)
-            topics = ["/raw/marvin/joint_state"]
+            topics = [MARVIN_JOINT_STATE_TOPIC]
             metadata = {key: list(getattr(payload, key)) for key in
                         ("frame_serial", "arm_state", "error_code", "low_speed")}
         else:
             names = JOINT_NAMES if kind == "joint_command" else GRIPPER_NAMES
             message = trajectory(payload, names, wall_time_ns)
-            topics = ["/command/marvin/joint_target" if kind == "joint_command" else "/command/das/target"]
+            topics = [
+                MARVIN_JOINT_COMMAND_TOPIC
+                if kind == "joint_command"
+                else DAS_COMMAND_TOPIC
+            ]
             metadata = dict(command=True)
         self._publishers[kind].publish(message)
         self._sample_status(topics, sequence_id, wall_time_ns, steady_ns, **metadata)
@@ -310,7 +329,9 @@ class Ros2DataBridge:
         sequence_id, raw_data, wall_time_ns, steady_ns = item
         message = tactile_grid(raw_data, ARM_NAMES[arm_index], wall_time_ns)
         self._tactile_publishers[arm_index].publish(message)
-        self._sample_status([f"/raw/das/{ARM_NAMES[arm_index]}/tactile"], sequence_id, wall_time_ns, steady_ns)
+        self._sample_status(
+            [DAS_TACTILE_TOPICS[arm_index]], sequence_id, wall_time_ns, steady_ns
+        )
 
     def _publish_camera(self, arm_index, item):
         sequence_id, frame, wall_time_ns, steady_ns = item
@@ -323,7 +344,9 @@ class Ros2DataBridge:
         image.step = image.width * channels
         image.data = frame.tobytes()
         self._camera_publishers[arm_index].publish(image)
-        self._sample_status([f"/raw/das/{ARM_NAMES[arm_index]}/image"], sequence_id, wall_time_ns, steady_ns)
+        self._sample_status(
+            [DAS_IMAGE_TOPICS[arm_index]], sequence_id, wall_time_ns, steady_ns
+        )
 
     def _publish_diagnostics(self):
         message = self._types["DiagnosticArray"]()

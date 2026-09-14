@@ -61,7 +61,7 @@ baseline.
 ## Validate
 
 ```bash
-python -m unittest discover -s tests -p 'test_marvin_hardware.py' -v
+python -m unittest tests.test_marvin_controller tests.test_marvin_simulation -v
 python -m unittest discover -s tests -p 'test_episode_postprocessor.py' -v
 ```
 

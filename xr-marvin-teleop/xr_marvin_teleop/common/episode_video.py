@@ -13,6 +13,10 @@ import re
 import tempfile
 
 from .collection_config import DEFAULT_CONFIG, read_json
+from xr_marvin_teleop.ros.protocol import (
+    DAS_COMPRESSED_IMAGE_STATUS_TOPICS,
+    DAS_COMPRESSED_IMAGE_TOPICS,
+)
 
 VIDEO_DEFAULTS = read_json(DEFAULT_CONFIG)["export"]
 PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow")
@@ -218,7 +222,7 @@ def export_episode(episode_directory, options=None, *, add_missing=False):
                                        key=lambda item: item[2].log_time)
                 for schema, channel, message in messages:
                     topic = channel.topic
-                    camera = topic in ("/raw/das/left/image/compressed", "/raw/das/right/image/compressed")
+                    camera = topic in DAS_COMPRESSED_IMAGE_TOPICS
                     if camera:
                         if schema is None or schema.name != "sensor_msgs/msg/CompressedImage":
                             raise ValueError(f"unsupported camera schema for {topic}")
@@ -252,9 +256,7 @@ def export_episode(episode_directory, options=None, *, add_missing=False):
                         counts[output_topic] += 1
                     else:
                         payload = message.data
-                        if variant == "h264" and topic in (
-                            "/raw/das/left/image/compressed/status", "/raw/das/right/image/compressed/status"
-                        ):
+                        if variant == "h264" and topic in DAS_COMPRESSED_IMAGE_STATUS_TOPICS:
                             status = deserialize_message(payload, DiagnosticArray)
                             for entry in status.status[0].values:
                                 if entry.key == "topics":

@@ -228,6 +228,95 @@ def _require_mcap():
         ) from error
 
 
+def _snapshot_calibrations(paths, episode_directory):
+    calibrations = []
+    calibration_directory = episode_directory / "calibration"
+    for index, path in enumerate(paths):
+        calibration_directory.mkdir(exist_ok=True)
+        snapshot_path = calibration_directory / f"{index:02d}_{path.name}"
+        shutil.copy2(path, snapshot_path)
+        calibrations.append(
+            {
+                "source_path": str(path),
+                "snapshot": str(snapshot_path.relative_to(episode_directory)),
+                "size_bytes": snapshot_path.stat().st_size,
+                "sha256": sha256_file(snapshot_path),
+            }
+        )
+    return calibrations
+
+
+def _recorder_process_specs(
+    project_root, episode_directory, config, configurations, preview_root
+):
+    process_specs = [
+        (
+            "state",
+            _recorder_command(
+                episode_directory / "state",
+                config["recording"]["state_topics"],
+                config["recording"]["state_storage"],
+                config["recording"]["qos"],
+                config["recording"]["state_cache_bytes"],
+            ),
+        )
+    ]
+    camera_ready_files = {}
+    if configurations is not None:
+        camera_ready_files = {
+            f"vision_{side}": episode_directory / f".vision_{side}.ready"
+            for side in ARM_NAMES
+        }
+        process_specs.extend(
+            (
+                f"vision_{side}",
+                _camera_command(
+                    project_root,
+                    side,
+                    configuration,
+                    episode_directory / f"vision_{side}",
+                    config["recording"]["camera_storage"],
+                    camera_ready_files[f"vision_{side}"],
+                    None if preview_root is None else preview_root / f"{side}.jpg",
+                    config["preview"]["fps"],
+                ),
+            )
+            for side, configuration in zip(ARM_NAMES, configurations)
+        )
+    return process_specs, camera_ready_files
+
+
+def _wait_for_recorders_ready(
+    recorders, camera_ready_files, stop_requested, timeout_seconds
+):
+    time.sleep(1.0)
+    for name, process, _log in recorders:
+        if process.poll() is not None:
+            raise RuntimeError(f"{name} recorder exited during startup")
+    pending = dict(camera_ready_files)
+    ready_deadline = time.monotonic() + timeout_seconds
+    while (
+        pending
+        and not stop_requested.is_set()
+        and time.monotonic() < ready_deadline
+    ):
+        for name, process, _log in recorders:
+            if process.poll() is not None:
+                raise RuntimeError(f"{name} recorder exited during startup")
+        pending = {
+            name: path for name, path in pending.items() if not path.is_file()
+        }
+        if pending:
+            time.sleep(0.05)
+    if stop_requested.is_set():
+        raise RuntimeError("recording stopped during camera startup")
+    if pending:
+        raise TimeoutError(
+            "camera writers produced no MJPEG frame: "
+            + ", ".join(sorted(pending))
+        )
+
+
 def main():
     project_root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description="Record one teleoperation episode")
@@ -299,21 +388,9 @@ def main():
     check_active_devices(config)
     # Only use snapshotted files after this point, including per-camera settings.
     configurations = None if arguments.no_vision else load_das_finger_configurations(arguments.das_config)
-    calibration_sources = arguments.calibration
-    calibrations = []
-    calibration_directory = episode_directory / "calibration"
-    for index, path in enumerate(calibration_sources):
-        calibration_directory.mkdir(exist_ok=True)
-        snapshot_path = calibration_directory / f"{index:02d}_{path.name}"
-        shutil.copy2(path, snapshot_path)
-        calibrations.append(
-            {
-                "source_path": str(path),
-                "snapshot": str(snapshot_path.relative_to(episode_directory)),
-                "size_bytes": snapshot_path.stat().st_size,
-                "sha256": sha256_file(snapshot_path),
-            }
-        )
+    calibrations = _snapshot_calibrations(
+        arguments.calibration, episode_directory
+    )
     metadata = {
         "message_protocol_version": 2,
         "message_contract": {
@@ -364,44 +441,13 @@ def main():
     metadata_path = episode_directory / "metadata.json"
     write_json(metadata_path, metadata)
 
-    process_specs = [
-        (
-            "state",
-            _recorder_command(
-                episode_directory / "state",
-                config["recording"]["state_topics"],
-                config["recording"]["state_storage"],
-                config["recording"]["qos"],
-                config["recording"]["state_cache_bytes"],
-            ),
-        )
-    ]
-    camera_ready_files = {}
-    if configurations is not None:
-        camera_ready_files = {
-            f"vision_{side}": episode_directory / f".vision_{side}.ready"
-            for side in ARM_NAMES
-        }
-        process_specs.extend(
-            (
-                f"vision_{side}",
-                _camera_command(
-                    project_root,
-                    side,
-                    configuration,
-                    episode_directory / f"vision_{side}",
-                    config["recording"]["camera_storage"],
-                    camera_ready_files[f"vision_{side}"],
-                    (
-                        None
-                        if arguments.preview_root is None
-                        else arguments.preview_root / f"{side}.jpg"
-                    ),
-                    config["preview"]["fps"],
-                ),
-            )
-            for side, configuration in zip(ARM_NAMES, configurations)
-        )
+    process_specs, camera_ready_files = _recorder_process_specs(
+        project_root,
+        episode_directory,
+        config,
+        configurations,
+        arguments.preview_root,
+    )
     publisher = EpisodePublisher()
     recorders = []
     stop_requested = threading.Event()
@@ -422,33 +468,12 @@ def main():
                 command, episode_directory / f"{name}_recorder.log"
             )
             recorders.append((name, process, log))
-        time.sleep(1.0)
-        for name, process, _log in recorders:
-            if process.poll() is not None:
-                raise RuntimeError(f"{name} recorder exited during startup")
-        ready_deadline = time.monotonic() + arguments.camera_startup_timeout
-        while (
-            camera_ready_files
-            and not stop_requested.is_set()
-            and time.monotonic() < ready_deadline
-        ):
-            for name, process, _log in recorders:
-                if process.poll() is not None:
-                    raise RuntimeError(f"{name} recorder exited during startup")
-            camera_ready_files = {
-                name: path
-                for name, path in camera_ready_files.items()
-                if not path.is_file()
-            }
-            if camera_ready_files:
-                time.sleep(0.05)
-        if stop_requested.is_set():
-            raise RuntimeError("recording stopped during camera startup")
-        if camera_ready_files:
-            raise TimeoutError(
-                "camera writers produced no MJPEG frame: "
-                + ", ".join(sorted(camera_ready_files))
-            )
+        _wait_for_recorders_ready(
+            recorders,
+            camera_ready_files,
+            stop_requested,
+            arguments.camera_startup_timeout,
+        )
         for path in episode_directory.glob(".vision_*.ready"):
             path.unlink()
         metadata["status"] = "recording"

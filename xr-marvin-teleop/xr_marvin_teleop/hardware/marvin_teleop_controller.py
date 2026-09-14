@@ -499,91 +499,90 @@ class MarvinHardwareTeleopController:
         q_command_rad = self._last_commanded_q_rad.copy()
         ik_succeeded = [False, False]
         for arm_index, is_grip_active in enumerate(grip_states):
-            arm_joint_slice = self._arm_joint_slice(arm_index)
-            arm_q_rad = robot_feedback.q_rad[arm_joint_slice]
-            current_tcp_transform = (
-                self.kinematics.fk_world(arm_index, arm_q_rad)
-            )
-
-            if is_grip_active:
-                self._return_start_times[arm_index] = None
-                self._return_start_q_rad[arm_index] = None
-                target_tcp_transform = self.pose_mapper.map_arm(
+            arm_slice = self._arm_joint_slice(arm_index)
+            q_command_rad[arm_slice], ik_succeeded[arm_index] = (
+                self._compute_arm_q_command(
                     arm_index,
+                    is_grip_active,
                     controller_poses_marvin[arm_index],
-                    current_tcp_transform,
-                    True,
-                )
-                q_ref_rad = (
-                    arm_q_rad
-                    if not self._previous_grip_states[arm_index]
-                    else self._last_ik_q_rad[arm_index]
-                )
-                if self.nsp_enabled:
-                    inverse_kinematics_result = self.kinematics.ik_world(
-                        arm_index,
-                        target_tcp_transform,
-                        q_ref_rad,
-                        nsp_angle_deg=float(
-                            self._nsp_current_angles_deg[arm_index]
-                        ),
-                    )
-                else:
-                    inverse_kinematics_result = self.kinematics.ik_world(
-                        arm_index, target_tcp_transform, q_ref_rad
-                    )
-                if inverse_kinematics_result.success:
-                    ik_succeeded[arm_index] = True
-                    q_command_rad[arm_joint_slice] = (
-                        inverse_kinematics_result.q_rad
-                    )
-                    self._last_ik_q_rad[arm_index] = (
-                        inverse_kinematics_result.q_rad.copy()
-                    )
-                continue
-
-            self.pose_mapper.map_arm(
-                arm_index,
-                controller_poses_marvin[arm_index],
-                current_tcp_transform,
-                False,
-            )
-            if reset_requested:
-                self._return_start_times[arm_index] = cycle_time_seconds
-                self._return_start_q_rad[arm_index] = arm_q_rad.copy()
-            elif self._previous_grip_states[arm_index]:
-                # On release, hold measured joints to avoid pursuing an old IK target.
-                q_command_rad[arm_joint_slice] = arm_q_rad
-                self._last_ik_q_rad[arm_index] = arm_q_rad.copy()
-            return_start_time = self._return_start_times[arm_index]
-            if return_start_time is None:
-                continue
-
-            return_progress = min(
-                1.0,
-                max(
-                    0.0,
-                    (cycle_time_seconds - return_start_time)
-                    / self.return_duration,
-                ),
-            )
-            cosine_blend = 0.5 - 0.5 * np.cos(np.pi * return_progress)
-            return_start_q_rad = self._return_start_q_rad[arm_index]
-            return_target_q_rad = self.initial_pose_q_rad[arm_joint_slice]
-            q_command_rad[arm_joint_slice] = (
-                return_start_q_rad
-                + cosine_blend
-                * (
-                    return_target_q_rad
-                    - return_start_q_rad
+                    robot_feedback.q_rad[arm_slice],
+                    reset_requested,
+                    cycle_time_seconds,
                 )
             )
-            if return_progress >= 1.0:
-                self._return_start_times[arm_index] = None
-                self._return_start_q_rad[arm_index] = None
 
         self._previous_grip_states = grip_states
         self._q_desired_rad = q_command_rad.copy()
+        return self._limit_joint_command_step(q_command_rad, ik_succeeded), reset_requested
+
+    def _compute_arm_q_command(
+        self,
+        arm_index,
+        is_grip_active,
+        controller_pose_marvin,
+        arm_q_rad,
+        reset_requested,
+        cycle_time_seconds,
+    ):
+        arm_slice = self._arm_joint_slice(arm_index)
+        current_tcp_transform = self.kinematics.fk_world(arm_index, arm_q_rad)
+        if is_grip_active:
+            self._return_start_times[arm_index] = None
+            self._return_start_q_rad[arm_index] = None
+            target_tcp_transform = self.pose_mapper.map_arm(
+                arm_index, controller_pose_marvin, current_tcp_transform, True
+            )
+            q_ref_rad = (
+                arm_q_rad
+                if not self._previous_grip_states[arm_index]
+                else self._last_ik_q_rad[arm_index]
+            )
+            ik_arguments = {}
+            if self.nsp_enabled:
+                ik_arguments["nsp_angle_deg"] = float(
+                    self._nsp_current_angles_deg[arm_index]
+                )
+            result = self.kinematics.ik_world(
+                arm_index, target_tcp_transform, q_ref_rad, **ik_arguments
+            )
+            if result.success:
+                self._last_ik_q_rad[arm_index] = result.q_rad.copy()
+                return result.q_rad, True
+            return self._last_commanded_q_rad[arm_slice], False
+
+        self.pose_mapper.map_arm(
+            arm_index, controller_pose_marvin, current_tcp_transform, False
+        )
+        command = self._last_commanded_q_rad[arm_slice].copy()
+        if reset_requested:
+            self._return_start_times[arm_index] = cycle_time_seconds
+            self._return_start_q_rad[arm_index] = arm_q_rad.copy()
+        elif self._previous_grip_states[arm_index]:
+            # On release, hold measured joints to avoid pursuing an old IK target.
+            command = arm_q_rad.copy()
+            self._last_ik_q_rad[arm_index] = arm_q_rad.copy()
+
+        return_start_time = self._return_start_times[arm_index]
+        if return_start_time is None:
+            return command, False
+        progress = min(
+            1.0,
+            max(
+                0.0,
+                (cycle_time_seconds - return_start_time) / self.return_duration,
+            ),
+        )
+        cosine_blend = 0.5 - 0.5 * np.cos(np.pi * progress)
+        return_start_q_rad = self._return_start_q_rad[arm_index]
+        command = return_start_q_rad + cosine_blend * (
+            self.initial_pose_q_rad[arm_slice] - return_start_q_rad
+        )
+        if progress >= 1.0:
+            self._return_start_times[arm_index] = None
+            self._return_start_q_rad[arm_index] = None
+        return command, False
+
+    def _limit_joint_command_step(self, q_command_rad, ik_succeeded):
         self._joint_interpolation_alpha.fill(1.0)
         max_step = np.deg2rad(self.joint_command_max_speed_deg_s) * self._command_dt
         for arm_index, success in enumerate(ik_succeeded):
@@ -598,7 +597,7 @@ class MarvinHardwareTeleopController:
                 self._joint_interpolation_alpha[arm_index] = alpha
                 # ponytail: velocity-only interpolation; add acceleration bounds if needed.
                 q_command_rad[arm_slice] = previous + alpha * delta
-        return q_command_rad.copy(), reset_requested
+        return q_command_rad.copy()
 
     @staticmethod
     def _deadzone(value, threshold):

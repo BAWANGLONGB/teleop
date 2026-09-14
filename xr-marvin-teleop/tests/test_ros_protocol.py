@@ -8,12 +8,48 @@ from unittest.mock import patch
 import numpy as np
 
 from xr_marvin_teleop.ros.protocol import (
-    JOINT_NAMES, PICO_TOPICS, SampleJoiner, joint_state, joint_positions, trajectory,
-    pico_messages, sample_status, status_values, tactile_grid, gripper_targets, GRIPPER_NAMES,
+    DAS_COMMAND_TOPIC,
+    DAS_COMPRESSED_IMAGE_TOPICS,
+    DAS_STATE_TOPICS,
+    GRIPPER_NAMES,
+    JOINT_NAMES,
+    MARVIN_JOINT_COMMAND_TOPIC,
+    MARVIN_JOINT_STATE_TOPIC,
+    PICO_TOPICS,
+    SampleJoiner,
+    gripper_targets,
+    joint_positions,
+    joint_state,
+    pico_messages,
+    sample_status,
+    status_topic,
+    status_values,
+    tactile_grid,
+    trajectory,
 )
 from xr_marvin_teleop.common.xr_client import XrSnapshot
-from xr_marvin_teleop.common.episode_postprocessor import _matrix_quaternion, _rpy_matrix
-from xr_marvin_teleop.common.xr_target_mapper import _rotation_matrix_from_openxr_pose
+from xr_marvin_teleop.common.episode_postprocessor import _matrix_quaternion, rpy_matrix
+from xr_marvin_teleop.common.xr_target_mapper import rotation_matrix_from_openxr_pose
+
+
+class TestTopicContract(unittest.TestCase):
+    def test_canonical_topic_names(self):
+        self.assertEqual(PICO_TOPICS, ("/raw/pico/poses", "/raw/pico/joy"))
+        self.assertEqual(MARVIN_JOINT_STATE_TOPIC, "/raw/marvin/joint_state")
+        self.assertEqual(MARVIN_JOINT_COMMAND_TOPIC, "/command/marvin/joint_target")
+        self.assertEqual(DAS_COMMAND_TOPIC, "/command/das/target")
+        self.assertEqual(
+            DAS_STATE_TOPICS,
+            ("/raw/das/left/state", "/raw/das/right/state"),
+        )
+        self.assertEqual(
+            DAS_COMPRESSED_IMAGE_TOPICS,
+            (
+                "/raw/das/left/image/compressed",
+                "/raw/das/right/image/compressed",
+            ),
+        )
+        self.assertEqual(status_topic(PICO_TOPICS[0]), "/raw/pico/status")
 
 
 class TestProtocol(unittest.TestCase):
@@ -39,10 +75,10 @@ class TestProtocol(unittest.TestCase):
         with self.assertRaises(ValueError):
             joint_positions(message)
         for rpy in ((0, 0, 0), (math.pi, 0, 0), (0, math.pi / 2, 0), (1.1, -0.5, 3.14)):
-            rotation = _rpy_matrix(rpy)
+            rotation = rpy_matrix(rpy)
             q = _matrix_quaternion(rotation)
             self.assertAlmostEqual(np.linalg.norm(q), 1.)
-            np.testing.assert_allclose(_rotation_matrix_from_openxr_pose([0, 0, 0, *q]), rotation, atol=1e-14)
+            np.testing.assert_allclose(rotation_matrix_from_openxr_pose([0, 0, 0, *q]), rotation, atol=1e-14)
         raw = bytes(range(256)) + bytes(range(192))
         grid = self.roundtrip(tactile_grid(raw, "left", time.time_ns()))
         self.assertEqual(bytes(grid.data), raw)

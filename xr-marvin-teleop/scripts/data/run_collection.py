@@ -201,8 +201,7 @@ def _preflight(arguments):
     print(f"Preflight OK; output disk free: {free_gib:.1f} GiB", flush=True)
 
 
-def _build_commands(arguments):
-    python = sys.executable
+def _build_recorder_command(arguments, python):
     recorder_ready_file = _recorder_ready_file(arguments)
     calibrations = [arguments.das_config, arguments.scale_calibration_path]
     for path in arguments.calibration:
@@ -249,8 +248,11 @@ def _build_commands(arguments):
         recorder.append("--no-vision")
     elif arguments.preview_root is not None:
         recorder.extend(("--preview-root", str(arguments.preview_root)))
+    return recorder
 
-    hardware = [
+
+def _build_hardware_command(arguments, python):
+    command = [
         python,
         str(PROJECT_ROOT / "scripts" / "hardware" / "teleop_marvin_hardware.py"),
         "--enable-hardware",
@@ -275,9 +277,9 @@ def _build_commands(arguments):
         str(arguments.joint_command_max_speed_deg_s),
     ]
     if arguments.scale_factor is not None:
-        hardware.extend(("--scale-factor", str(arguments.scale_factor)))
+        command.extend(("--scale-factor", str(arguments.scale_factor)))
     if arguments.nsp_lateral:
-        hardware.extend(
+        command.extend(
             (
                 "--nsp-lateral",
                 "--nsp-max-angle",
@@ -294,13 +296,11 @@ def _build_commands(arguments):
                 str(arguments.nsp_lateral_sign_right),
             )
         )
-    pico = [
-        python,
-        str(PROJECT_ROOT / "scripts" / "data" / "publish_pico.py"),
-        "--poll-hz",
-        str(arguments.pico_poll_hz),
-    ]
-    das_commands = {
+    return command
+
+
+def _build_das_commands(arguments, python):
+    return {
         f"das_{side}": [
             python,
             str(PROJECT_ROOT / "scripts" / "data" / "publish_das.py"),
@@ -317,11 +317,21 @@ def _build_commands(arguments):
         ]
         for side in ("left", "right")
     }
+
+
+def _build_commands(arguments):
+    python = sys.executable
+    pico = [
+        python,
+        str(PROJECT_ROOT / "scripts" / "data" / "publish_pico.py"),
+        "--poll-hz",
+        str(arguments.pico_poll_hz),
+    ]
     return {
         "pico": pico,
-        **das_commands,
-        "recorder": recorder,
-        "hardware": hardware,
+        **_build_das_commands(arguments, python),
+        "recorder": _build_recorder_command(arguments, python),
+        "hardware": _build_hardware_command(arguments, python),
     }
 
 

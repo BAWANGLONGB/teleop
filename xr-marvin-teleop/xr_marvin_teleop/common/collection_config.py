@@ -11,6 +11,13 @@ from pathlib import Path
 
 
 from .marvin_scale_calibration import ensure_scale_calibration
+from xr_marvin_teleop.ros.protocol import (
+    MARVIN_JOINT_COMMAND_TOPIC,
+    MARVIN_JOINT_STATE_TOPIC,
+    PICO_STATUS_TOPIC,
+    PICO_TOPICS,
+    status_topic,
+)
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config/collection.json"
@@ -177,9 +184,14 @@ def validate_config(config):
         for topic in topics
     ) or len(topics) != len(set(topics)):
         raise ValueError("state_topics must be unique absolute ROS topic names")
-    required = {"/raw/pico/poses", "/raw/pico/joy", "/raw/pico/status",
-                "/raw/marvin/joint_state", "/raw/marvin/joint_state/status",
-                "/command/marvin/joint_target", "/command/marvin/joint_target/status"}
+    required = {
+        *PICO_TOPICS,
+        PICO_STATUS_TOPIC,
+        MARVIN_JOINT_STATE_TOPIC,
+        status_topic(MARVIN_JOINT_STATE_TOPIC),
+        MARVIN_JOINT_COMMAND_TOPIC,
+        status_topic(MARVIN_JOINT_COMMAND_TOPIC),
+    }
     if not required.issubset(topics):
         raise ValueError("state_topics must include PICO, Marvin feedback and joint commands")
     robot = config["robot"]

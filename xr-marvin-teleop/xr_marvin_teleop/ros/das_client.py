@@ -5,8 +5,17 @@ import threading
 import time
 import uuid
 from . import spin_until_stopped
-from .protocol import (GRIPPER_NAMES, SampleJoiner, joint_positions, trajectory,
-                       sample_status, stamp_ns)
+from .protocol import (
+    DAS_COMMAND_TOPIC,
+    DAS_STATE_TOPICS,
+    GRIPPER_NAMES,
+    SampleJoiner,
+    joint_positions,
+    sample_status,
+    stamp_ns,
+    status_topic,
+    trajectory,
+)
 
 from xr_marvin_teleop.hardware.interface.das_finger import (
     ARM_NAMES,
@@ -88,16 +97,18 @@ class RosDasClient:
         self._update_ids = [0, 0]
         self._command_sequence = 0
         self._publisher = self._node.create_publisher(
-            JointTrajectory, "/command/das/target", critical_qos
+            JointTrajectory, DAS_COMMAND_TOPIC, critical_qos
         )
         self._status_publisher = self._node.create_publisher(
-            DiagnosticArray, "/command/das/target/status", critical_qos)
-        self._joiners = [SampleJoiner([f"/raw/das/{side}/state"], int(encoder_stale_timeout_seconds * 1e9))
-                         for side in ARM_NAMES]
+            DiagnosticArray, status_topic(DAS_COMMAND_TOPIC), critical_qos)
+        self._joiners = [
+            SampleJoiner([topic], int(encoder_stale_timeout_seconds * 1e9))
+            for topic in DAS_STATE_TOPICS
+        ]
         self._subscriptions = tuple(
             self._node.create_subscription(
                 message_type,
-                f"/raw/das/{side}/state" + suffix,
+                DAS_STATE_TOPICS[index] + suffix,
                 lambda message, index=index, suffix=suffix: self._callback(index, suffix, message),
                 critical_qos,
             )
@@ -113,7 +124,7 @@ class RosDasClient:
         self._thread.start()
 
     def _callback(self, arm_index, suffix, message):
-        topic = f"/raw/das/{ARM_NAMES[arm_index]}/state"
+        topic = DAS_STATE_TOPICS[arm_index]
         try:
             joined = self._joiners[arm_index].push("status" if suffix else topic, message)
             if joined is None:
@@ -220,7 +231,7 @@ class RosDasClient:
         self._command_sequence += 1
         self._publisher.publish(message)
         self._status_publisher.publish(sample_status(
-            ["/command/das/target"], wall_time_ns, self._session, self._command_sequence,
+            [DAS_COMMAND_TOPIC], wall_time_ns, self._session, self._command_sequence,
             steady_ns, command=True))
         with self._condition:
             self._targets[:] = targets

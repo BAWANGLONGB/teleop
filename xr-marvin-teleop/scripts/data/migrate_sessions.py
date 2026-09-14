@@ -26,6 +26,11 @@ from xr_marvin_teleop.common.episode_package import extract_episode_mcap, read_a
 from xr_marvin_teleop.common.episode_postprocessor import postprocess_episode
 from xr_marvin_teleop.common.episode_validator import validate_episode
 from xr_marvin_teleop.common.episode_video import H264Encoder, activity_lock, export_episode, protobuf_schema
+from xr_marvin_teleop.ros.protocol import (
+    ARM_NAMES,
+    DAS_COMPRESSED_IMAGE_TOPICS,
+    MARVIN_JOINT_COMMAND_TOPIC,
+)
 
 
 def sha256(path):
@@ -150,7 +155,7 @@ def convert_legacy(source, work, config):
 
     extracted = extract_episode_mcap(source, work / "extracted")  # Checks original attachment CRCs.
     original = json.loads((extracted / "meta/meta.json").read_text())
-    base = int(original["validation"]["bags"]["data"]["/command/marvin/joint_target"]["first_bag_time_ns"])
+    base = int(original["validation"]["bags"]["data"][MARVIN_JOINT_COMMAND_TOPIC]["first_bag_time_ns"])
     metadata = deepcopy(original["source_metadata"])
     metadata["episode_id"] = original["episode_id"]
     metadata["dataset_format"] = "foxglove"
@@ -194,7 +199,7 @@ def convert_legacy(source, work, config):
             if counts["/legacy/resampled_state"] != original["length"]:
                 raise ValueError("Parquet row count differs from legacy metadata")
             sid = writer.register_schema(message_type.DESCRIPTOR.full_name, "protobuf", protobuf_schema(message_type))
-            for side in ("left", "right"):
+            for side, current_image_topic in zip(ARM_NAMES, DAS_COMPRESSED_IMAGE_TOPICS):
                 video = original["videos"].get(f"observation.images.{side}")
                 if video is None:
                     continue
@@ -203,7 +208,7 @@ def convert_legacy(source, work, config):
                 times = video["timestamps"]
                 if len(times) != video["frames"]:
                     raise ValueError("legacy video timestamp count mismatch")
-                offset = original["source_metadata"].get("postprocessing", {}).get("alignment", {}).get("topic_time_offsets_ns", {}).get(f"/raw/das/{side}/image/compressed", 0)
+                offset = original["source_metadata"].get("postprocessing", {}).get("alignment", {}).get("topic_time_offsets_ns", {}).get(current_image_topic, 0)
                 h264 = H264Encoder(config["export"], max(1, round(video["fps"]))) if variant == "h264" else None
                 jpeg = None
                 path = (extracted / video["path"]).resolve()

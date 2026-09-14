@@ -7,29 +7,34 @@ import itertools
 import math
 import os
 from pathlib import Path
-from xr_marvin_teleop.ros.protocol import (JOINT_NAMES, GRIPPER_NAMES, joint_positions,
-    ordered_values, pose_values, status_values, stamp_ns)
-from xr_marvin_teleop.common.episode_postprocessor import _matrix_rpy
-from xr_marvin_teleop.common.xr_target_mapper import _rotation_matrix_from_openxr_pose
+from xr_marvin_teleop.ros.protocol import (
+    ARM_NAMES,
+    DAS_COMMAND_TOPIC,
+    DAS_COMPRESSED_IMAGE_TOPICS,
+    DAS_STATE_TOPICS,
+    GRIPPER_NAMES,
+    JOINT_NAMES,
+    MARVIN_JOINT_COMMAND_TOPIC,
+    MARVIN_JOINT_STATE_TOPIC,
+    MARVIN_TCP_COMMAND_TOPICS,
+    MARVIN_TCP_STATE_TOPICS,
+    joint_positions,
+    ordered_values,
+    pose_values,
+    stamp_ns,
+    status_values,
+)
+from xr_marvin_teleop.common.episode_postprocessor import matrix_rpy
+from xr_marvin_teleop.common.xr_target_mapper import rotation_matrix_from_openxr_pose
 
 
-LEFT_IMAGE = "/raw/das/left/image/compressed"
-RIGHT_IMAGE = "/raw/das/right/image/compressed"
-ROBOT_STATE = "/raw/marvin/joint_state"
-JOINT_COMMAND = "/command/marvin/joint_target"
-GRIPPER_COMMAND = "/command/das/target"
-DAS_STATE = {
-    "left": "/raw/das/left/state",
-    "right": "/raw/das/right/state",
-}
-TCP_STATE = {
-    "left": "/raw/marvin/left/tcp_pose",
-    "right": "/raw/marvin/right/tcp_pose",
-}
-TCP_COMMAND = {
-    "left": "/command/marvin/left/tcp_target",
-    "right": "/command/marvin/right/tcp_target",
-}
+LEFT_IMAGE, RIGHT_IMAGE = DAS_COMPRESSED_IMAGE_TOPICS
+ROBOT_STATE = MARVIN_JOINT_STATE_TOPIC
+JOINT_COMMAND = MARVIN_JOINT_COMMAND_TOPIC
+GRIPPER_COMMAND = DAS_COMMAND_TOPIC
+DAS_STATE = dict(zip(ARM_NAMES, DAS_STATE_TOPICS))
+TCP_STATE = dict(zip(ARM_NAMES, MARVIN_TCP_STATE_TOPICS))
+TCP_COMMAND = dict(zip(ARM_NAMES, MARVIN_TCP_COMMAND_TOPICS))
 STATE_TOPICS = (
     ROBOT_STATE,
     JOINT_COMMAND,
@@ -100,7 +105,7 @@ def _state_value(topic, message, metadata=None):
         )
     return (
         tuple(pose_values(message.pose)[:3]),
-        tuple(_matrix_rpy(_rotation_matrix_from_openxr_pose(pose_values(message.pose)))),
+        tuple(matrix_rpy(rotation_matrix_from_openxr_pose(pose_values(message.pose)))),
         valid,
     )
 

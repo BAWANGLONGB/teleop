@@ -6,9 +6,31 @@ import math
 import time
 
 VERSION = 2
+ARM_NAMES = ("left", "right")
 JOINT_NAMES = tuple(f"Joint{i}_{side}" for side in ("L", "R") for i in range(1, 8))
 GRIPPER_NAMES = ("left_gripper_width", "right_gripper_width")
-PICO_TOPICS = ("/raw/pico/poses", "/raw/pico/joy")
+PICO_TOPIC_PREFIX = "/raw/pico"
+PICO_POSES_TOPIC = f"{PICO_TOPIC_PREFIX}/poses"
+PICO_JOY_TOPIC = f"{PICO_TOPIC_PREFIX}/joy"
+PICO_STATUS_TOPIC = f"{PICO_TOPIC_PREFIX}/status"
+PICO_TOPICS = (PICO_POSES_TOPIC, PICO_JOY_TOPIC)
+MARVIN_JOINT_STATE_TOPIC = "/raw/marvin/joint_state"
+MARVIN_JOINT_COMMAND_TOPIC = "/command/marvin/joint_target"
+DAS_COMMAND_TOPIC = "/command/das/target"
+DAS_STATE_TOPICS = tuple(f"/raw/das/{side}/state" for side in ARM_NAMES)
+DAS_TACTILE_TOPICS = tuple(f"/raw/das/{side}/tactile" for side in ARM_NAMES)
+DAS_IMAGE_TOPICS = tuple(f"/raw/das/{side}/image" for side in ARM_NAMES)
+DAS_COMPRESSED_IMAGE_TOPICS = tuple(f"{topic}/compressed" for topic in DAS_IMAGE_TOPICS)
+DAS_COMPRESSED_IMAGE_STATUS_TOPICS = tuple(
+    f"{topic}/status" for topic in DAS_COMPRESSED_IMAGE_TOPICS
+)
+MARVIN_TCP_STATE_TOPICS = tuple(
+    f"/raw/marvin/{side}/tcp_pose" for side in ARM_NAMES
+)
+MARVIN_TCP_COMMAND_TOPICS = tuple(
+    f"/command/marvin/{side}/tcp_target" for side in ARM_NAMES
+)
+DIAGNOSTICS_TOPIC = "/diagnostics"
 PICO_AXES = ("left_grip", "right_grip", "left_trigger", "right_trigger", "left_thumbstick_y", "right_thumbstick_y")
 PICO_BUTTONS = ("a", "b", "x", "y")
 
@@ -24,7 +46,7 @@ def stamp_ns(message):
 
 
 def status_topic(topic):
-    return "/raw/pico/status" if topic in PICO_TOPICS else topic + "/status"
+    return PICO_STATUS_TOPIC if topic in PICO_TOPICS else topic + "/status"
 
 
 def sample_status(topics, timestamp_ns, session, sequence, steady_ns, *, valid=True,

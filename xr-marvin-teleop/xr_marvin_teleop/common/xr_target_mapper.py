@@ -7,7 +7,7 @@ OPENXR_TO_MARVIN_ROTATION = np.array(
 )
 
 
-def _rotation_matrix_from_openxr_pose(openxr_pose):
+def rotation_matrix_from_openxr_pose(openxr_pose):
     quaternion = np.asarray(openxr_pose[3:], dtype=float)
     norm_squared = np.dot(quaternion, quaternion)
     if norm_squared < 4.0 * np.finfo(float).eps:
@@ -29,7 +29,7 @@ def transform_controller_poses_to_marvin_frame(xr_snapshot):
         xr_snapshot.left_controller_pose,
         xr_snapshot.right_controller_pose,
     ):
-        controller_rotation = _rotation_matrix_from_openxr_pose(controller_pose)
+        controller_rotation = rotation_matrix_from_openxr_pose(controller_pose)
         marvin_controller_poses.append(
             (
                 OPENXR_TO_MARVIN_ROTATION @ controller_pose[:3],

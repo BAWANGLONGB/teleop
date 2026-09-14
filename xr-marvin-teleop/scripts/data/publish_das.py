@@ -17,8 +17,17 @@ from xr_marvin_teleop.hardware.interface.das_finger import (
     load_das_sdk,
 )
 from xr_marvin_teleop.ros.protocol import (
-    GRIPPER_NAMES, SampleJoiner, gripper_targets, joint_state, tactile_grid,
-    sample_status, status_topic,
+    DAS_COMMAND_TOPIC,
+    DAS_STATE_TOPICS,
+    DAS_TACTILE_TOPICS,
+    DIAGNOSTICS_TOPIC,
+    GRIPPER_NAMES,
+    SampleJoiner,
+    gripper_targets,
+    joint_state,
+    sample_status,
+    status_topic,
+    tactile_grid,
 )
 
 
@@ -52,7 +61,9 @@ class DasSidePublisher:
 
         self.side = side
         self._session = uuid.uuid4().hex
-        self._command_joiner = SampleJoiner(["/command/das/target"], int(encoder_stale_timeout_seconds * 1e9))
+        self._command_joiner = SampleJoiner(
+            [DAS_COMMAND_TOPIC], int(encoder_stale_timeout_seconds * 1e9)
+        )
         self.arm_index = ARM_NAMES.index(side)
         self.configurations = tuple(configurations)
         self.configuration = self.configurations[self.arm_index]
@@ -89,26 +100,35 @@ class DasSidePublisher:
             rclpy.init()
         self._node = rclpy.create_node(f"das_{side}_source")
         self._state_publisher = self._node.create_publisher(
-            JointState, f"/raw/das/{side}/state", critical_qos
+            JointState, DAS_STATE_TOPICS[self.arm_index], critical_qos
         )
         self._tactile_publisher = self._node.create_publisher(
-            Grid, f"/raw/das/{side}/tactile", sensor_qos
+            Grid, DAS_TACTILE_TOPICS[self.arm_index], sensor_qos
         )
         self._diagnostic_publisher = self._node.create_publisher(
-            DiagnosticArray, "/diagnostics", critical_qos
+            DiagnosticArray, DIAGNOSTICS_TOPIC, critical_qos
         )
         self._command_subscription = self._node.create_subscription(
             JointTrajectory,
-            "/command/das/target",
+            DAS_COMMAND_TOPIC,
             self._handle_command,
             critical_qos,
         )
         self._command_status_subscription = self._node.create_subscription(
-            DiagnosticArray, "/command/das/target/status",
+            DiagnosticArray, status_topic(DAS_COMMAND_TOPIC),
             lambda message: self._handle_command(message, "status"), critical_qos)
-        self._sample_publishers = {kind: self._node.create_publisher(
-            DiagnosticArray, status_topic(f"/raw/das/{side}/{kind}"),
-            critical_qos if kind == "state" else sensor_qos) for kind in ("state", "tactile")}
+        sample_topics = {
+            "state": DAS_STATE_TOPICS[self.arm_index],
+            "tactile": DAS_TACTILE_TOPICS[self.arm_index],
+        }
+        self._sample_publishers = {
+            kind: self._node.create_publisher(
+                DiagnosticArray,
+                status_topic(topic),
+                critical_qos if kind == "state" else sensor_qos,
+            )
+            for kind, topic in sample_topics.items()
+        }
 
         self._state_queue = queue.Queue(maxsize=128)
         self._tactile_queue = queue.Queue(maxsize=32)
@@ -213,7 +233,7 @@ class DasSidePublisher:
             "tactile",
         )
 
-    def _handle_command(self, message, topic="/command/das/target"):
+    def _handle_command(self, message, topic=DAS_COMMAND_TOPIC):
         if not self._encoder_ready.is_set():
             return
         try:
@@ -223,7 +243,7 @@ class DasSidePublisher:
             parts, values, _ = joined
             if not values["valid"]:
                 return
-            targets = gripper_targets(parts["/command/das/target"], self.configurations)
+            targets = gripper_targets(parts[DAS_COMMAND_TOPIC], self.configurations)
             target_m = targets[self.arm_index]
             self._bus.set_target_distance(target_m)
         except Exception as error:
@@ -250,7 +270,7 @@ class DasSidePublisher:
             message = joint_state([distance], [GRIPPER_NAMES[self.arm_index]], wall)
             self._state_publisher.publish(message)
             self._sample_publishers["state"].publish(sample_status(
-                [f"/raw/das/{self.side}/state"], wall, self._session, sequence, steady,
+                [DAS_STATE_TOPICS[self.arm_index]], wall, self._session, sequence, steady,
                 valid=valid, target_distance_m=target, status_flags=flags))
         while True:
             try:
@@ -264,7 +284,7 @@ class DasSidePublisher:
                 continue
             self._tactile_publisher.publish(message)
             self._sample_publishers["tactile"].publish(sample_status(
-                [f"/raw/das/{self.side}/tactile"], wall, self._session, sequence, steady))
+                [DAS_TACTILE_TOPICS[self.arm_index]], wall, self._session, sequence, steady))
 
     def _publish_diagnostics(self):
         message = self._types["DiagnosticArray"]()
