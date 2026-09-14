@@ -79,6 +79,8 @@ class MarvinSessionLogger:
         sample_id=None,
         sample_monotonic_ns=None,
         wall_time_ns=None,
+        q_desired_rad=None,
+        joint_interpolation_alpha=None,
     ):
         if self._thread is None:
             raise RuntimeError("Marvin session logger is closed")
@@ -151,6 +153,8 @@ class MarvinSessionLogger:
             "q_feedback_rad": robot_feedback.q_rad,
             "dq_feedback_rad_s": robot_feedback.dq_rad_s,
             "q_command_rad": np.asarray(q_command_rad, dtype=float),
+            "q_desired_rad": q_desired_rad,
+            "joint_interpolation_alpha": joint_interpolation_alpha,
         }
         self._queue.put(_json_value(record))
 

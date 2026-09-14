@@ -328,6 +328,70 @@ class FakeMarvinVendorKinematics:
 
 
 class TestMarvinHardware(unittest.TestCase):
+    def test_joint_command_interpolation_and_hold_transitions(self):
+        released = XrSnapshot(1, make_openxr_pose(), make_openxr_pose(),
+                              (0.0, 0.0), False, False)
+        active = XrSnapshot(2, make_openxr_pose(), make_openxr_pose(),
+                            (1.0, 1.0), False, False)
+        adapter = FakeMarvinSdkAdapter()
+        kinematics = FakeMarvinVendorKinematics()
+        target = np.zeros(14)
+        fail = False
+
+        def ik(arm, *_args):
+            return VendorIkResult(not fail, None if fail else target[arm*7:arm*7+7].copy(), None)
+
+        kinematics.ik_world = ik
+        with tempfile.TemporaryDirectory() as directory:
+            logger = MarvinSessionLogger(directory, "interpolation")
+            controller = MarvinHardwareTeleopController(
+                xr_client=FakeXRClient([released] + [active]*8 + [None, released, active, active]),
+                adapter=adapter, kinematics=kinematics,
+                scale_calibration_path=Path(directory)/"scale.json",
+                requested_scale_factor=1.0, session_logger=logger,
+                control_parameter_settle_seconds=0, mode_settle_seconds=0,
+                pd_settle_seconds=0,
+            )
+            controller.prepare_hardware()
+            try:
+                controller.execute_control_cycle(0.0)
+                target[:2] = np.deg2rad([6, 3])
+                target[7] = np.deg2rad(1)
+                for i in range(1, 4):
+                    sent = controller.execute_control_cycle(i * 0.02)
+                    np.testing.assert_allclose(np.rad2deg(sent[:2]), [2*i, i])
+                    self.assertAlmostEqual(np.rad2deg(sent[7]), 1)
+                target[0] = np.deg2rad(12)
+                self.assertAlmostEqual(np.rad2deg(controller.execute_control_cycle(0.08)[0]), 8)
+                # A new target replaces the old one immediately, without a queue.
+                target[0] = np.deg2rad(7)
+                self.assertAlmostEqual(np.rad2deg(controller.execute_control_cycle(0.10)[0]), 7)
+                target[0] = np.deg2rad(20)
+                self.assertAlmostEqual(np.rad2deg(controller.execute_control_cycle(0.11)[0]), 8)
+                fail = True
+                self.assertAlmostEqual(np.rad2deg(controller.execute_control_cycle(0.13)[0]), 8)
+                fail = False
+                # Stale input discards pending movement; release holds measured joints.
+                self.assertAlmostEqual(np.rad2deg(controller.execute_control_cycle(0.15)[0]), 8)
+                adapter.q_rad[0] = np.deg2rad(5)
+                # Simulate a Grip release edge independently of stale recovery.
+                controller._previous_grip_states = (True, True)
+                self.assertAlmostEqual(np.rad2deg(controller.execute_control_cycle(0.17)[0]), 5)
+                # A stalled loop can advance at most two nominal periods.
+                self.assertAlmostEqual(np.rad2deg(controller.execute_control_cycle(1.17)[0]), 9)
+                self.assertAlmostEqual(np.rad2deg(controller.execute_control_cycle(1.17)[0]), 9)
+                with self.assertRaises(ValueError):
+                    controller.execute_control_cycle(1.16)
+            finally:
+                controller.shutdown_hardware()
+            records = read_marvin_session(logger.path)
+            np.testing.assert_allclose(np.rad2deg(records[1]["q_desired_rad"][:2]), [6, 3])
+            np.testing.assert_allclose(records[1]["joint_interpolation_alpha"], [1/3, 1])
+        for speed in (0, -1, float("nan"), float("inf"), True):
+            with self.assertRaises(ValueError):
+                MarvinHardwareTeleopController(None, None, None, "unused.json",
+                                               joint_command_max_speed_deg_s=speed)
+
     def test_pico_client_waits_for_advancing_data_and_rejects_stale_data(self):
         xr_sdk = FakeXrSdk([1, 1, 2, 2, 2, 2])
         with patch("builtins.print"):
@@ -640,6 +704,7 @@ class TestMarvinHardware(unittest.TestCase):
             requested_scale_factor=1.0,
             gripper_control_enabled=True,
             initial_gripper_closedness=(0.5, 0.5),
+            gripper_rate=1.0,
         )
         binary_controller._update_gripper_command(snapshot(9), 0.0)
         binary_controller._update_gripper_command(snapshot(10, trigger=0.1), 0.1)
@@ -1494,8 +1559,10 @@ class TestMarvinHardware(unittest.TestCase):
 
         repeated_targets_deg = np.rad2deg(repeated_targets_rad)
         maximum_joint_peak_to_peak_deg = np.ptp(
-            repeated_targets_deg, axis=0
+            repeated_targets_deg[-5:], axis=0
         ).max()
+        # The initial step now ramps; a stationary target must settle without jitter.
+        self.assertLessEqual(np.max(np.abs(np.diff(repeated_targets_deg, axis=0))), 2.0 + 1e-9)
         self.assertTrue(np.all(np.isfinite(repeated_targets_deg)))
         self.assertLessEqual(maximum_position_error_mm, 0.1)
         self.assertLessEqual(maximum_rotation_error_deg, 0.01)
@@ -1843,6 +1910,28 @@ class TestMarvinHardware(unittest.TestCase):
         np.testing.assert_allclose(recovered_q_rad, moved_q_rad)
         self.assertAlmostEqual(resumed_q_rad[0], 0.1)
         controller.shutdown_hardware()
+
+    def test_xr_dropout_cancels_return_until_new_button_edge(self):
+        pose = make_openxr_pose()
+        released = XrSnapshot(1, pose, pose, (0.0, 0.0), False, False)
+        reset = XrSnapshot(2, pose, pose, (0.0, 0.0), False, True)
+        controller = MarvinHardwareTeleopController(
+            FakeXRClient([released, reset, released, None, reset, released, reset, released]),
+            FakeMarvinSdkAdapter(), FakeMarvinVendorKinematics(), Path("unused.json"),
+            requested_scale_factor=1.0, control_parameter_settle_seconds=0,
+            mode_settle_seconds=0, pd_settle_seconds=0,
+        )
+        controller.prepare_hardware()
+        try:
+            controller.execute_control_cycle(0.0)
+            before = controller.execute_control_cycle(0.1)
+            self.assertGreater(np.max(np.abs(before)), 0)
+            for timestamp in (1.08, 1.10, 1.12):
+                np.testing.assert_allclose(controller.execute_control_cycle(timestamp), before)
+            np.testing.assert_allclose(controller.execute_control_cycle(1.14), before)
+            self.assertGreater(np.max(np.abs(controller.execute_control_cycle(1.24) - before)), 0)
+        finally:
+            controller.shutdown_hardware()
 
     def test_session_log_marks_dropped_xr_frame(self):
         adapter = FakeMarvinSdkAdapter()

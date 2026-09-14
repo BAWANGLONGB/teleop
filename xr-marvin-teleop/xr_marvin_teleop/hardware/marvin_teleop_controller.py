@@ -20,6 +20,7 @@ from xr_marvin_teleop.common.xr_target_mapper import (
 DEFAULT_JOINT_K = (4.0, 4.0, 4.0, 2.0, 2.0, 2.0, 2.0)
 DEFAULT_JOINT_D = (0.3, 0.3, 0.3, 0.3, 0.2, 0.2, 0.2)
 DEFAULT_CONTROL_HZ = 50
+DEFAULT_JOINT_COMMAND_MAX_SPEED_DEG_S = 100.0
 DEFAULT_JOINT_VELOCITY_RATIO = 10
 DEFAULT_JOINT_ACCELERATION_RATIO = 10
 MAX_CONSECUTIVE_STALE_FEEDBACK_CYCLES = 3
@@ -74,7 +75,16 @@ class MarvinHardwareTeleopController:
         nsp_lateral_deadzone_m=DEFAULT_NSP_LATERAL_DEADZONE_M,
         nsp_lateral_full_scale_m=DEFAULT_NSP_LATERAL_FULL_SCALE_M,
         nsp_lateral_signs=(1.0, 1.0),
+        joint_command_max_speed_deg_s=DEFAULT_JOINT_COMMAND_MAX_SPEED_DEG_S,
     ):
+        if (isinstance(joint_command_max_speed_deg_s, (bool, np.bool_))
+                or not np.isfinite(joint_command_max_speed_deg_s)
+                or joint_command_max_speed_deg_s <= 0):
+            raise ValueError("joint_command_max_speed_deg_s must be finite and positive")
+        self.joint_command_max_speed_deg_s = float(joint_command_max_speed_deg_s)
+        self._last_control_time = None
+        self._q_desired_rad = None
+        self._joint_interpolation_alpha = np.ones(2)
         control_hz = float(control_hz)
         if not 50.0 <= control_hz <= 200.0:
             raise ValueError("control_hz must be within [50, 200]")
@@ -487,6 +497,7 @@ class MarvinHardwareTeleopController:
         self._advance_nsp_angles(grip_states, cycle_time_seconds)
 
         q_command_rad = self._last_commanded_q_rad.copy()
+        ik_succeeded = [False, False]
         for arm_index, is_grip_active in enumerate(grip_states):
             arm_joint_slice = self._arm_joint_slice(arm_index)
             arm_q_rad = robot_feedback.q_rad[arm_joint_slice]
@@ -522,6 +533,7 @@ class MarvinHardwareTeleopController:
                         arm_index, target_tcp_transform, q_ref_rad
                     )
                 if inverse_kinematics_result.success:
+                    ik_succeeded[arm_index] = True
                     q_command_rad[arm_joint_slice] = (
                         inverse_kinematics_result.q_rad
                     )
@@ -571,7 +583,21 @@ class MarvinHardwareTeleopController:
                 self._return_start_q_rad[arm_index] = None
 
         self._previous_grip_states = grip_states
-        self._last_commanded_q_rad = q_command_rad
+        self._q_desired_rad = q_command_rad.copy()
+        self._joint_interpolation_alpha.fill(1.0)
+        max_step = np.deg2rad(self.joint_command_max_speed_deg_s) * self._command_dt
+        for arm_index, success in enumerate(ik_succeeded):
+            if not success:
+                continue
+            arm_slice = self._arm_joint_slice(arm_index)
+            previous = self._last_commanded_q_rad[arm_slice]
+            delta = q_command_rad[arm_slice] - previous
+            distance = np.max(np.abs(delta))
+            if distance > max_step:
+                alpha = max_step / distance
+                self._joint_interpolation_alpha[arm_index] = alpha
+                # ponytail: velocity-only interpolation; add acceleration bounds if needed.
+                q_command_rad[arm_slice] = previous + alpha * delta
         return q_command_rad.copy(), reset_requested
 
     @staticmethod
@@ -728,6 +754,7 @@ class MarvinHardwareTeleopController:
         wall_time_ns = time.time_ns()
         steady_ns = time.monotonic_ns()
         self.adapter.send_joint_command(q_rad, wait_response=wait_response)
+        self._last_commanded_q_rad = np.asarray(q_rad, dtype=float).copy()
         self._publish_telemetry(
             "publish_joint_command",
             q_rad,
@@ -750,6 +777,8 @@ class MarvinHardwareTeleopController:
             self.scale_factor,
             self.gripper_closedness,
             gripper_state=gripper_state,
+            q_desired_rad=self._q_desired_rad,
+            joint_interpolation_alpha=self._joint_interpolation_alpha,
         )
 
     def execute_control_cycle(self, cycle_time_seconds=None):
@@ -757,6 +786,14 @@ class MarvinHardwareTeleopController:
             raise RuntimeError("prepare_hardware() must run before control cycles")
         if cycle_time_seconds is None:
             cycle_time_seconds = time.monotonic()
+        if not np.isfinite(cycle_time_seconds):
+            raise ValueError("control cycle time must be finite")
+        elapsed = (self.control_period_seconds if self._last_control_time is None
+                   else cycle_time_seconds - self._last_control_time)
+        if elapsed < 0:
+            raise ValueError("control cycle time regressed")
+        self._command_dt = min(elapsed, 2.0 * self.control_period_seconds)
+        self._last_control_time = cycle_time_seconds
         xr_snapshot = self.xr_client.read_snapshot()
         if not getattr(self.xr_client, "is_ros_source", False):
             self._publish_telemetry(
@@ -780,6 +817,8 @@ class MarvinHardwareTeleopController:
             self._xr_frame_available = False
             self.pose_mapper.reset_arm()
             self._previous_grip_states = (False, False)
+            self._return_start_times = [None, None]
+            self._return_start_q_rad = [None, None]
             # Require a new button edge after recovery, never replay a held A/B press.
             self._previous_button_a = True
             self._previous_button_b = True
@@ -790,6 +829,8 @@ class MarvinHardwareTeleopController:
             self._nsp_lateral_anchors = [None, None]
             self._last_nsp_update_time = None
             q_command_rad = self._last_commanded_q_rad.copy()
+            self._q_desired_rad = q_command_rad.copy()
+            self._joint_interpolation_alpha.fill(1.0)
             self._send_joint_command(q_command_rad)
             self._record_control_sample(None, robot_feedback, q_command_rad)
             return q_command_rad

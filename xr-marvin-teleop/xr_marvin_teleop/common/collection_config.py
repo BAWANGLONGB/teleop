@@ -26,6 +26,7 @@ ARG_FIELDS = {
     "robot_model": ("robot", "model"), "robot_ip": ("robot", "ip"),
     **{name: ("robot", name) for name in (
         "thumbstick_y_sign", "gripper_mode", "scale_factor", "nsp_lateral", "nsp_max_angle", "nsp_angle_rate",
+        "joint_command_max_speed_deg_s",
         "nsp_lateral_deadzone", "nsp_lateral_range", "nsp_lateral_sign_left", "nsp_lateral_sign_right")},
     "no_vision": ("capture", "vision_enabled"), "max_duration": ("capture", "max_duration_s"),
     "pico_poll_hz": ("capture", "pico_poll_hz"), "preview_root": ("preview", "root"),
@@ -42,6 +43,7 @@ CONFIG_SCHEMA = {
     "paths": {key: list if key == "calibrations" else str for key in PATH_FIELDS["paths"]},
     "robot": {
         "model": str, "ip": str, "thumbstick_y_sign": int, "gripper_mode": str, "scale_factor": None,
+        "joint_command_max_speed_deg_s": float,
         "nsp_lateral": bool, "nsp_max_angle": float, "nsp_angle_rate": float,
         "nsp_lateral_deadzone": float, "nsp_lateral_range": float,
         "nsp_lateral_sign_left": int, "nsp_lateral_sign_right": int,
@@ -126,6 +128,9 @@ def load_config(path=None, *, saved=None):
 def validate_config(config):
     def check_types(value, reference, name="config"):
         if isinstance(reference, dict):
+            # Older capture snapshots predate interpolation; keep their provenance intact.
+            if name == "config.robot" and isinstance(value, dict) and "joint_command_max_speed_deg_s" not in value:
+                reference = {k: v for k, v in reference.items() if k != "joint_command_max_speed_deg_s"}
             if not isinstance(value, dict) or value.keys() != reference.keys():
                 raise ValueError(f"{name}: missing or unknown fields")
             for key in reference:
@@ -150,6 +155,9 @@ def validate_config(config):
         ):
             raise ValueError(f"{name} must be within [{low}, {high}]")
     number(config["capture"]["pico_poll_hz"], "pico_poll_hz", 30, 240)
+    if "joint_command_max_speed_deg_s" in config["robot"]:
+        number(config["robot"]["joint_command_max_speed_deg_s"],
+               "joint_command_max_speed_deg_s", 1e-9, 1e12)
     for value, name in ((config["capture"]["max_duration_s"], "max_duration_s"),
                         (config["robot"]["scale_factor"], "scale_factor")):
         if value is not None:
@@ -248,6 +256,8 @@ def apply_config(arguments, *, saved=None):
 def bind_config(arguments, config):
     arguments.effective_config = config
     for name, (group, field) in ARG_FIELDS.items():
+        if field == "joint_command_max_speed_deg_s" and field not in config[group]:
+            continue
         value = config[group][field]
         if name == "no_vision":
             value = not value

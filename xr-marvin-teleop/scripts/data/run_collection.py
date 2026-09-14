@@ -75,6 +75,7 @@ def parse_command_line_arguments(arguments=None):
     parser.add_argument("--thumbstick-y-sign", type=int, choices=(-1, 1))
     parser.add_argument("--gripper-mode", choices=("binary", "continuous"))
     parser.add_argument("--scale-factor", type=float)
+    parser.add_argument("--joint-command-max-speed-deg-s", type=float)
     parser.add_argument("--nsp-lateral", action="store_true")
     parser.add_argument("--nsp-max-angle", type=float)
     parser.add_argument("--nsp-angle-rate", type=float)
@@ -270,6 +271,8 @@ def _build_commands(arguments):
         arguments.gripper_mode,
         "--ros2",
         "--pico-from-ros2",
+        "--joint-command-max-speed-deg-s",
+        str(arguments.joint_command_max_speed_deg_s),
     ]
     if arguments.scale_factor is not None:
         hardware.extend(("--scale-factor", str(arguments.scale_factor)))

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -165,6 +166,38 @@ try {
   await evaluate('document.querySelector(".nav-item[data-nav=workbench]").click()');
   assert.deepEqual(await evaluate('({open:sidebar.classList.contains("open"),inert:sidebar.inert,expanded:menuButton.getAttribute("aria-expanded")})'),
     { open: false, inert: true, expanded: "false" });
+  // Serve the real UI over HTTP, with hardware endpoints replaced by a local stub.
+  const resets = [];
+  const server = createServer(async (request, response) => {
+    const file = request.url.split("?")[0].split("/").pop();
+    if (["index.html", "app.js", "styles.css"].includes(file)) {
+      response.setHeader("Content-Type", file.endsWith("js") ? "text/javascript" : file.endsWith("css") ? "text/css" : "text/html");
+      return response.end(await readFile(new URL(file, import.meta.url)));
+    }
+    if (request.url === "/api/robot/reset") {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      resets.push({body: JSON.parse(body), origin: request.headers.origin});
+    }
+    response.setHeader("Content-Type", "application/json");
+    response.end("{}");
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    await send("Page.navigate", {url: `${origin}/UI/index.html`});
+    await evaluate('new Promise(resolve=>{const timer=setInterval(()=>{if(location.protocol==="http:"&&document.readyState==="complete"&&typeof requestRobotReset==="function"){clearInterval(timer);resolve()}},20)})');
+    await evaluate('window.confirm=()=>false;requestRobotReset()');
+    assert.equal(resets.length, 0);
+    await evaluate('window.confirm=()=>true;requestRobotReset()');
+    assert.equal(resets.length, 1);
+    assert.equal(resets[0].origin, origin);
+    assert.equal(resets[0].body.confirmed_estop, true);
+    assert.equal(resets[0].body.confirmed_workspace_clear, true);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
   socket.close();
   console.log("UI interaction check passed");
 } finally {

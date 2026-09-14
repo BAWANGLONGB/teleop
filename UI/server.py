@@ -56,6 +56,7 @@ EPISODE_RE = re.compile(r"episode_\d{6}_[0-9a-f]{8}\Z")
 KNOWN_CAMERA_FORMATS = {"640x480": (60,), "1600x1296": (60,)}
 STATE_LOCK = threading.Lock()
 START_LOCK = threading.Lock()
+EXPORT_LOCK = threading.Lock()
 RESET_LOCK = threading.Lock()
 PICO_LOCK = threading.Lock()
 ERROR_LOCK = threading.Lock()
@@ -147,6 +148,8 @@ def episode_path(dataset_root, episode_id, *, prefer_directory=False):
 
 
 def move_episode_to_trash(dataset_root, episode_id, collection_active=False, *, session=None):
+    if EXPORT_LOCK.locked():
+        raise ApiError(HTTPStatus.CONFLICT, "正在导出，暂不能删除 Episode")
     if collection_active:
         raise ApiError(HTTPStatus.CONFLICT, "采集中不能删除 Episode")
     with activity_lock(dataset_root), annotation_lock(dataset_root):
@@ -199,7 +202,7 @@ def prepare_mcap_export(payload):
     episode_id = payload.get("episode")
     if not isinstance(episode_id, str) or not EPISODE_RE.fullmatch(episode_id):
         raise ApiError(HTTPStatus.BAD_REQUEST, "Episode ID 格式无效")
-    if not START_LOCK.acquire(blocking=False):
+    if not EXPORT_LOCK.acquire(blocking=False):
         raise ApiError(HTTPStatus.CONFLICT, "正在启动或打包，请稍后重试")
     try:
         try:
@@ -208,8 +211,9 @@ def prepare_mcap_export(payload):
         except ApiError as error:
             if error.status != HTTPStatus.UNPROCESSABLE_ENTITY:
                 raise
-        if collection_active():
-            raise ApiError(HTTPStatus.CONFLICT, "请先停止录制并等待原始数据保存完成")
+        with START_LOCK:
+            if collection_active():
+                raise ApiError(HTTPStatus.CONFLICT, "请先停止录制并等待原始数据保存完成")
         episode = episode_path(DATASET_ROOT, episode_id, prefer_directory=True)
         if not episode.is_dir():
             raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "旧格式请先迁移")
@@ -220,6 +224,9 @@ def prepare_mcap_export(payload):
                    str(episode), "--output-root", str(DATASET_ROOT), "--add-missing",
                    "--h264" if variant == "h264" else "--no-h264",
                    "--mjpeg" if variant == "mjpeg" else "--no-mjpeg"]
+        if variant == "h264":
+            for name in ("h264_crf", "h264_preset", "h264_keyint", "h264_threads"):
+                command += ["--" + name.replace("_", "-"), str(COLLECTION_SETTINGS["export"][name])]
         with log_path.open("ab", buffering=0) as log:
             result = subprocess.run(command, cwd=PROJECT_ROOT, env=teleop_environment(),
                                     stdout=log, stderr=subprocess.STDOUT)
@@ -229,7 +236,7 @@ def prepare_mcap_export(payload):
         mcap_export_files(DATASET_ROOT, [episode_id], variant)
         return {"ready": True}
     finally:
-        START_LOCK.release()
+        EXPORT_LOCK.release()
 
 
 def episode_record(path):
@@ -722,7 +729,9 @@ def listen_controller_buttons(channel, stopped):
             continue
 
 
-def request_robot_reset():
+def request_robot_reset(payload):
+    if any(payload.get(name) is not True for name in ("confirmed_estop", "confirmed_workspace_clear")):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "复位前必须确认物理急停可用、工作区无人和障碍物")
     if not RESET_LOCK.acquire(blocking=False):
         raise ApiError(HTTPStatus.CONFLICT, "机器人正在复位")
     try:
@@ -774,6 +783,8 @@ def request_robot_reset():
 
 def _start_collection(payload, part):
     global COLLECTION, DEVICES, HOTKEY_AFTER_NS
+    if part == "recording" and EXPORT_LOCK.locked():
+        raise ApiError(HTTPStatus.CONFLICT, "正在导出，请等待完成后录制")
     if RESET_LOCK.locked():
         raise ApiError(HTTPStatus.CONFLICT, "机器人正在复位")
     if part == "devices" and devices_active():
@@ -1010,6 +1021,26 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(UI_ROOT), **kwargs)
 
+    def parse_request(self):
+        if not super().parse_request():
+            return False
+        if self.command in ("POST", "DELETE", "PUT", "PATCH"):
+            host = self.headers.get("Host", "")
+            try:
+                hostname = urlsplit("http://" + host).hostname
+            except ValueError:
+                hostname = None
+            allowed_hosts = {"localhost", "127.0.0.1", "::1", self.server.server_name,
+                             self.connection.getsockname()[0]}
+            if (hostname not in allowed_hosts
+                    or self.headers.get("Origin") != "http://" + host):
+                self.send_json({"error": "请求来源无效"}, HTTPStatus.FORBIDDEN)
+                return False
+            if self.headers.get_content_type() != "application/json":
+                self.send_json({"error": "请求必须使用 application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+                return False
+        return True
+
     def end_headers(self):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -1167,7 +1198,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/devices/stop":
             return self.handle_api(lambda: self.send_json(stop_devices(), HTTPStatus.ACCEPTED))
         if path == "/api/robot/reset":
-            return self.handle_api(lambda: self.send_json(request_robot_reset()))
+            return self.handle_api(lambda: self.send_json(request_robot_reset(self.read_body())))
         if path == "/api/devices/pico/reconnect":
             return self.handle_api(lambda: self.send_json(restart_pico(), HTTPStatus.ACCEPTED))
         self.send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)

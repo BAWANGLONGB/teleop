@@ -13,6 +13,7 @@
     "thumbstick_y_sign": 1,
     "gripper_mode": "binary",
     "scale_factor": 1.2,
+    "joint_command_max_speed_deg_s": 100.0,
     "nsp_lateral": false, "nsp_max_angle": 5.0, "nsp_angle_rate": 20.0,
     "nsp_lateral_deadzone": 0.03, "nsp_lateral_range": 0.12,
     "nsp_lateral_sign_left": 1, "nsp_lateral_sign_right": 1
@@ -51,6 +52,6 @@
   },
   "export": {
     "mjpeg": true, "h264": true, "h264_crf": 18,
-    "h264_preset": "veryfast", "h264_keyint": 10, "h264_threads": 2
+    "h264_preset": "veryfast", "h264_keyint": 30, "h264_threads": 2
   }
 }

@@ -20,6 +20,18 @@ from xr_marvin_teleop.common.episode_video import add_video_arguments
 
 
 class TestCollectionConfig(unittest.TestCase):
+    def test_interpolation_config_and_legacy_capture(self):
+        config = load_config()
+        self.assertEqual(config["robot"]["joint_command_max_speed_deg_s"], 100.0)
+        for value in (0, -1, True, None, float("nan"), float("inf")):
+            invalid = deepcopy(config)
+            invalid["robot"]["joint_command_max_speed_deg_s"] = value
+            with self.assertRaises(ValueError):
+                validate_config(invalid)
+        del config["robot"]["joint_command_max_speed_deg_s"]
+        restored = apply_config(argparse.Namespace(), saved=config)
+        self.assertNotIn("joint_command_max_speed_deg_s", restored["robot"])
+
     def test_layers_paths_switches_and_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -149,8 +161,11 @@ class TestCollectionConfig(unittest.TestCase):
             args = namespace["parse_command_line_arguments"]([
                 "--config", str(config), "--task", "test", "--enable-hardware",
                 "--output-root", str(root), "--session", "session_test", "--episode-id", "episode_120000_deadbeef",
+                "--joint-command-max-speed-deg-s", "80",
                 "--confirmed-estop", "--confirmed-joint-mapping"])
             commands = namespace["_build_commands"](args)
+            hardware = commands["hardware"]
+            self.assertEqual(hardware[hardware.index("--joint-command-max-speed-deg-s") + 1], "80.0")
             recorder = commands["recorder"]
             self.assertEqual(recorder[recorder.index("--camera-startup-timeout") + 1], "22.0")
             self.assertEqual(recorder[recorder.index("--config") + 1], str(config))

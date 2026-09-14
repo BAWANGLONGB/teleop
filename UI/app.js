@@ -698,10 +698,11 @@ async function startRecording() {
 
 async function requestRobotReset() {
   if (!useApi) return showToast("机器人复位需要启动 UI 后端");
+  if (!window.confirm("确认物理急停可用，双臂工作区无人和障碍物，然后复位机器人？")) return;
   robotResetPending = true;
   syncResetButton();
   try {
-    await api("/api/robot/reset", { method: "POST", body: "{}" });
+    await api("/api/robot/reset", { method: "POST", body: JSON.stringify(collectionPayload()) });
     showToast("机器人已复位到初始位");
   } catch (error) {
     showToast(error.message);

@@ -51,7 +51,7 @@ class TestProtocol(unittest.TestCase):
             tactile_grid(raw[:-1], "left", time.time_ns())
         from xr_marvin_teleop.hardware.interface.das_finger import DASFingerConfiguration
         configs = (DASFingerConfiguration("/dev/l", "/dev/cl", .01, .07),) * 2
-        self.assertEqual(gripper_targets(trajectory([0., 1.], GRIPPER_NAMES, time.time_ns()), configs), (.01, .07))
+        np.testing.assert_allclose(gripper_targets(trajectory([0., 1.], GRIPPER_NAMES, time.time_ns()), configs), (.01, .07), rtol=0, atol=1e-14)
         with self.assertRaisesRegex(ValueError, "openness"):
             gripper_targets(trajectory([1.1, 0.], GRIPPER_NAMES, time.time_ns()), configs)
 

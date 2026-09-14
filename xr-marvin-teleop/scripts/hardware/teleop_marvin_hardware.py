@@ -19,6 +19,7 @@ from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
 )
 from xr_marvin_teleop.hardware.marvin_teleop_controller import (
     DEFAULT_CONTROL_HZ,
+    DEFAULT_JOINT_COMMAND_MAX_SPEED_DEG_S,
     DEFAULT_JOINT_ACCELERATION_RATIO,
     DEFAULT_JOINT_D,
     DEFAULT_JOINT_K,
@@ -159,6 +160,8 @@ def parse_command_line_arguments(arguments=None):
         "--log-directory", type=Path, default=DEFAULT_LOG_DIRECTORY
     )
     parser.add_argument("--control-hz", type=float, default=DEFAULT_CONTROL_HZ)
+    parser.add_argument("--joint-command-max-speed-deg-s", type=float,
+                        default=DEFAULT_JOINT_COMMAND_MAX_SPEED_DEG_S)
     parser.add_argument("--return-duration", type=float, default=3.0)
     parser.add_argument(
         "--joint-velocity-ratio",
@@ -327,6 +330,7 @@ def main():
             joint_acceleration_ratio=arguments.joint_acceleration_ratio,
             requested_scale_factor=arguments.scale_factor,
             control_hz=arguments.control_hz,
+            joint_command_max_speed_deg_s=arguments.joint_command_max_speed_deg_s,
             return_duration=arguments.return_duration,
             expected_sdk_version=arguments.expected_sdk_version,
             session_logger=session_logger,

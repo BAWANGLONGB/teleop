@@ -131,6 +131,24 @@ class RosPicoClient:
     def _spin(self):
         spin_until_stopped(self._executor, self._node.context, self._stop_event)
 
+    def read_frame(self):
+        """Atomically read the sample and identity without refreshing its age.
+
+        Invalid frames retain their arrival time for disconnect diagnostics.
+        Consumers must treat the returned snapshot as immutable.
+        """
+        with self._condition:
+            if self._receive_steady_ns == 0:
+                return None
+            age = time.monotonic_ns() - self._receive_steady_ns
+            return {
+                "snapshot": self._snapshot,
+                "valid": bool(self._valid and 0 <= age <= self._max_age_ns),
+                "publisher_session_id": self._sample_identity["publisher_session_id"],
+                "sequence_id": self._sequence_id,
+                "receive_monotonic_ns": self._receive_steady_ns,
+            }
+
     def read_snapshot(self):
         with self._condition:
             if self._receive_steady_ns == 0:

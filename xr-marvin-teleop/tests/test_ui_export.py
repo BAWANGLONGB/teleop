@@ -1,9 +1,12 @@
 """On-demand exports: selected format, reuse, and recording exclusion."""
 from contextlib import nullcontext
 import importlib.util
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 import runpy
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -11,6 +14,49 @@ from xr_marvin_teleop.common.collection_config import write_json
 
 
 class TestUiExport(unittest.TestCase):
+    def test_http_write_origin_and_reset_confirmation(self):
+        spec = importlib.util.spec_from_file_location("secure_ui", Path(__file__).resolve().parents[2] / "UI/server.py")
+        ui = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ui)
+        with patch.object(ui, "process_running", return_value=False), patch.object(ui.subprocess, "run") as run:
+            for payload in ({}, {"confirmed_estop": True},
+                            {"confirmed_estop": True, "confirmed_workspace_clear": "true"}):
+                with self.assertRaises(ui.ApiError):
+                    ui.request_robot_reset(payload)
+            run.assert_not_called()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ui.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        host = f"127.0.0.1:{server.server_port}"
+        payload = '{"confirmed_estop":true,"confirmed_workspace_clear":true}'
+        try:
+            with patch.object(ui, "request_robot_reset", return_value={"completed": True}) as reset:
+                for method, origin, content_type, request_host, status in (
+                    ("POST", "https://untrusted.example", "application/x-www-form-urlencoded", host, 403),
+                    ("POST", None, "application/json", host, 403),
+                    ("POST", "null", "application/json", host, 403),
+                    ("DELETE", "https://untrusted.example", "application/json", host, 403),
+                    ("POST", "http://untrusted.example", "application/json", "untrusted.example", 403),
+                    ("POST", "http://" + host, "text/plain", host, 415),
+                    ("POST", "http://" + host, "application/json", host, 200),
+                ):
+                    connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+                    try:
+                        headers = {"Host": request_host, "Content-Type": content_type}
+                        if origin is not None:
+                            headers["Origin"] = origin
+                        connection.request(method, "/api/robot/reset", payload, headers)
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, status)
+                        response.read()
+                    finally:
+                        connection.close()
+                reset.assert_called_once_with({"confirmed_estop": True, "confirmed_workspace_clear": True})
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_recording_stop_does_not_package_and_devices_do_not_block_export(self):
         from xr_marvin_teleop.common.episode_video import activity_lock
         main = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/data/run_collection.py"))["main"]
@@ -55,10 +101,24 @@ class TestUiExport(unittest.TestCase):
             payload = {"episode": episode.name, "format": "mjpeg"}
 
             def pack(command, **kwargs):
-                self.assertTrue(ui.START_LOCK.locked())
+                self.assertTrue(ui.EXPORT_LOCK.locked())
+                self.assertTrue(ui.START_LOCK.acquire(blocking=False))
+                ui.START_LOCK.release()
+                with patch.object(ui, "_stop_devices", return_value={"status": "stopping"}):
+                    self.assertEqual(ui.stop_devices(), {"status": "stopping"})
+                with self.assertRaises(ui.ApiError):
+                    ui.start_collection({})
+                with self.assertRaises(ui.ApiError):
+                    ui.move_episode_to_trash(ui.DATASET_ROOT, episode.name)
                 self.assertIn("--add-missing", command)
                 variant = "mjpeg" if "--mjpeg" in command else "h264"
                 self.assertIn("--no-h264" if variant == "mjpeg" else "--no-mjpeg", command)
+                for name in ("h264_crf", "h264_preset", "h264_keyint", "h264_threads"):
+                    flag = "--" + name.replace("_", "-")
+                    if variant == "h264":
+                        self.assertEqual(command[command.index(flag) + 1], str(ui.COLLECTION_SETTINGS["export"][name]))
+                    else:
+                        self.assertNotIn(flag, command)
                 (episode / "final").mkdir(exist_ok=True)
                 (episode / "final" / f"{episode.name}.{variant}.mcap").write_bytes(variant.encode())
                 return Mock(returncode=0)
@@ -87,6 +147,7 @@ class TestUiExport(unittest.TestCase):
                 self.assertFalse(h264.exists())
                 self.assertEqual(raw.read_bytes(), b"original")
                 self.assertFalse(ui.START_LOCK.locked())
+                self.assertFalse(ui.EXPORT_LOCK.locked())
 
 
 if __name__ == "__main__":

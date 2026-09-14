@@ -399,6 +399,14 @@ JSONL 继续作为控制调试日志，不作为训练数据的主格式。
 `--control-hz`、`--joint-velocity-ratio` 和 `--joint-acceleration-ratio`。
 控制参数、模式和 PD 前馈设置后分别等待 `0.2 s / 1 s / 1 s` 并复核反馈。
 
+Grip 遥操作的 IK 目标按臂限速插值，默认 `100°/s`（50 Hz 下每周期最大 `2°`），
+同一条臂的七关节共用插值比例；小幅变化直接通过，大幅变化逐步靠近最新目标。
+采集配置 `robot.joint_command_max_speed_deg_s` 或命令行
+`--joint-command-max-speed-deg-s` 可调节该值，重启设备后生效。
+松开 Grip 保持实测位置，PICO 失效或 IK 失败保持已发送目标；B 回零保留余弦插值。
+JSONL 的 `q_desired_rad` 记录插值前目标，`q_command_rad` 记录发送值，
+`joint_interpolation_alpha` 按左、右臂记录比例。该处理只限制目标速度，不限制加速度。
+
 ## 离线验证
 
 在已安装本项目的 `Teleop` 环境、项目根目录运行，不连接设备：
