@@ -1,0 +1,4 @@
+-e ./xr-marvin-teleop[video,lerobot]
+opencv-python>=4.5.0
+pyarmor>=8.0.0
+pyserial>=3.5

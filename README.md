@@ -17,9 +17,12 @@
 ```bash
 source /home/zxcx/TeleOp/.miniconda-xr/etc/profile.d/conda.sh
 conda activate Teleop
-cd /home/zxcx/TeleOp/xr-marvin-teleop
-python -m pip install -e .
+cd /home/zxcx/TeleOp
+python -m pip install -r requirements.txt --no-build-isolation
 ```
+
+该文件包含项目本体、视频/旧数据迁移工具及 DAS Python SDK 所需依赖。ROS 2、
+GStreamer、PICO Service 和 Marvin SDK 仍按[首次部署文档](xr-marvin-teleop/docs/首次部署.md)安装。
 
 ## 数据采集 UI
 
