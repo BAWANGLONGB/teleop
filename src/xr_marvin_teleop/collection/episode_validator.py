@@ -1,0 +1,295 @@
+"""Offline integrity checks for state/vision rosbag2 episode data."""
+
+import hashlib
+import json
+import time
+import sqlite3
+from pathlib import Path
+
+from .collection_config import write_json
+from xr_marvin_teleop.ros.protocol import (
+    ARM_NAMES,
+    DAS_COMPRESSED_IMAGE_TOPICS,
+    DAS_IMAGE_TOPICS,
+    MARVIN_JOINT_COMMAND_TOPIC,
+    MARVIN_JOINT_STATE_TOPIC,
+    MARVIN_TCP_COMMAND_TOPICS,
+    MARVIN_TCP_STATE_TOPICS,
+    PICO_STATUS_TOPIC,
+    PICO_TOPICS,
+    stamp_ns,
+    status_topic,
+    status_values,
+)
+
+
+def sha256_file(path):
+    """Hash large recordings without loading them into memory."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def inspect_bag(
+    path,
+    storage_id="mcap",
+    expected_steady_offset_ns=None,
+    expected_topic_offsets_ns=None,
+):
+    try:
+        import rosbag2_py
+        from rclpy.serialization import deserialize_message
+        from rosidl_runtime_py.utilities import get_message
+    except (ImportError, OSError) as error:
+        raise RuntimeError("validation requires a sourced ROS2 environment") from error
+
+    path = Path(path)
+    reader = rosbag2_py.SequentialReader()
+    reader.open(
+        rosbag2_py.StorageOptions(uri=str(path), storage_id=storage_id),
+        rosbag2_py.ConverterOptions("", ""),
+    )
+    topic_types = {
+        item.name: item.type for item in reader.get_all_topics_and_types()
+    }
+    message_types = {}
+    statistics = {
+        topic: {
+            "type": type_name,
+            "count": 0,
+            "first_bag_time_ns": None,
+            "last_bag_time_ns": None,
+            "bag_time_regressions": 0,
+            "source_time_regressions": 0,
+            "sequence_gaps": 0,
+            "steady_alignment_errors": 0,
+            "decode_errors": 0,
+            "metadata_missing": 0,
+            "metadata_orphans": 0,
+            "invalid_samples": 0,
+            "sequence_check": "unavailable",
+        }
+        for topic, type_name in topic_types.items()
+    }
+    last_bag_time = {}
+    last_source_time = {}
+    last_sequence = {}
+    # Disk-backed exact matching keeps multi-hour validation bounded in memory.
+    samples = sqlite3.connect("")
+    samples.execute("CREATE TABLE samples (topic TEXT, stamp INTEGER, data INTEGER, metadata INTEGER)")
+    while reader.has_next():
+        topic, serialized, bag_time_ns = reader.read_next()
+        item = statistics[topic]
+        item["count"] += 1
+        if item["first_bag_time_ns"] is None:
+            item["first_bag_time_ns"] = int(bag_time_ns)
+        item["last_bag_time_ns"] = int(bag_time_ns)
+        if bag_time_ns < last_bag_time.get(topic, bag_time_ns):
+            item["bag_time_regressions"] += 1
+        last_bag_time[topic] = bag_time_ns
+        try:
+            if topic not in message_types:
+                message_types[topic] = get_message(topic_types[topic])
+            message_type = message_types[topic]
+            message = deserialize_message(serialized, message_type)
+        except Exception:
+            item["decode_errors"] += 1
+            continue
+        if topic.endswith("/status"):
+            try:
+                values = status_values(message)
+                timestamp = stamp_ns(message)
+                session = values["publisher_session_id"]
+                sequence = values["sequence_id"]
+                source_time = int(values["source_timestamp_ns"])
+                for target in values["topics"]:
+                    if status_topic(target) != topic:
+                        raise ValueError("metadata topic does not match payload target")
+                    samples.execute("INSERT INTO samples VALUES (?, ?, 0, 1)", (target, timestamp))
+                    if target not in statistics:
+                        item["metadata_orphans"] += 1
+                        continue
+                    target_stats = statistics[target]
+                    target_stats["sequence_check"] = "available"
+                    target_stats["invalid_samples"] += int(not values["valid"])
+                    key = (target, session)
+                    previous = last_sequence.get(key)
+                    if previous is not None and sequence != previous + 1:
+                        target_stats["sequence_gaps"] += max(1, sequence - previous - 1)
+                    last_sequence[key] = sequence
+                    if source_time and source_time < last_source_time.get(key, source_time):
+                        target_stats["source_time_regressions"] += 1
+                    if source_time:
+                        last_source_time[key] = source_time
+            except (ValueError, TypeError, KeyError, AttributeError):
+                item["decode_errors"] += 1
+            continue
+        if hasattr(message, "header") or hasattr(message, "timestamp"):
+            samples.execute("INSERT INTO samples VALUES (?, ?, 1, 0)", (topic, stamp_ns(message)))
+        source_time = int(getattr(message, "source_timestamp_ns", 0))
+        if source_time:
+            if source_time < last_source_time.get(topic, source_time):
+                item["source_time_regressions"] += 1
+            last_source_time[topic] = source_time
+        steady_time = int(
+            getattr(
+                message,
+                "receive_steady_ns",
+                getattr(message, "issue_steady_ns", 0),
+            )
+        )
+        if (
+            steady_time
+            and expected_steady_offset_ns is not None
+            and bag_time_ns
+            != steady_time
+            + expected_steady_offset_ns
+            - (expected_topic_offsets_ns or {}).get(topic, 0)
+        ):
+            item["steady_alignment_errors"] += 1
+        sequence = int(getattr(message, "sequence_id", 0))
+        if sequence:
+            previous = last_sequence.get(topic)
+            if previous is not None and sequence > previous + 1:
+                item["sequence_gaps"] += sequence - previous - 1
+            elif previous is not None and sequence <= previous:
+                item["sequence_gaps"] += 1
+            last_sequence[topic] = sequence
+    rows = samples.execute("SELECT topic, SUM(MAX(0, ndata-nmeta)), SUM(MAX(0, nmeta-ndata)) FROM "
+                           "(SELECT topic, stamp, SUM(data) ndata, SUM(metadata) nmeta FROM samples GROUP BY topic, stamp) GROUP BY topic")
+    for topic, missing, orphaned in rows:
+        if topic in statistics and (topic.startswith(("/raw/", "/command/"))
+                                    and not topic.endswith(("/tcp_pose", "/tcp_target"))):
+            statistics[topic]["metadata_missing"] = missing
+            statistics[topic]["metadata_orphans"] = orphaned
+    samples.close()
+    for item in statistics.values():
+        duration_ns = (
+            0
+            if item["count"] < 2
+            else item["last_bag_time_ns"] - item["first_bag_time_ns"]
+        )
+        item["duration_ns"] = duration_ns
+        item["mean_rate_hz"] = (
+            0.0 if duration_ns <= 0 else (item["count"] - 1) * 1e9 / duration_ns
+        )
+    return statistics
+
+
+def validate_episode(
+    episode_directory,
+    required_topics=(
+        *PICO_TOPICS,
+        PICO_STATUS_TOPIC,
+        MARVIN_JOINT_STATE_TOPIC,
+        MARVIN_JOINT_COMMAND_TOPIC,
+    ),
+):
+    episode_directory = Path(episode_directory).resolve()
+    metadata_path = episode_directory / "metadata.json"
+    metadata = (
+        json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata_path.is_file()
+        else {}
+    )
+    processed_bag = metadata.get("processed_bag")
+    steady_offset_ns = (
+        metadata.get("postprocessing", {})
+        .get("alignment", {})
+        .get("steady_to_wall_offset_ns")
+    )
+    topic_offsets_ns = (
+        metadata.get("postprocessing", {})
+        .get("alignment", {})
+        .get("topic_time_offsets_ns", {})
+    )
+    bags = {}
+    errors = []
+    degraded = []
+    declared_bags = metadata.get("bags")
+    bag_names = list(declared_bags or ("state", "vision"))
+    if processed_bag and processed_bag not in bag_names:
+        bag_names.append(processed_bag)
+    elif not processed_bag and (episode_directory / "data").exists():
+        bag_names.append("data")
+    for bag_name in bag_names:
+        bag_path = episode_directory / bag_name
+        if not bag_path.exists():
+            if bag_name == "state" or declared_bags or bag_name == processed_bag:
+                errors.append(f"{bag_name} bag is missing")
+            continue
+        try:
+            bags[bag_name] = inspect_bag(
+                bag_path,
+                expected_steady_offset_ns=(
+                    steady_offset_ns if bag_name == processed_bag else None
+                ),
+                expected_topic_offsets_ns=(
+                    topic_offsets_ns if bag_name == processed_bag else None
+                ),
+            )
+        except Exception as error:
+            errors.append(f"{bag_name} bag unreadable: {error}")
+    state_topics = bags.get("state", {})
+    for topic in required_topics:
+        if state_topics.get(topic, {}).get("count", 0) == 0:
+            errors.append(f"required topic has no messages: {topic}")
+    vision_topics = bags.get("vision")
+    processed_vision_topics = []
+    if vision_topics is not None:
+        for topic in DAS_IMAGE_TOPICS:
+            if vision_topics.get(topic, {}).get("count", 0) == 0:
+                errors.append(f"required vision topic has no messages: {topic}")
+            processed_vision_topics.append(topic)
+    for side, topic in zip(ARM_NAMES, DAS_COMPRESSED_IMAGE_TOPICS):
+        bag_name = f"vision_{side}"
+        if bag_name not in bags:
+            continue
+        if bags[bag_name].get(topic, {}).get("count", 0) == 0:
+            errors.append(f"required vision topic has no messages: {topic}")
+        processed_vision_topics.append(topic)
+    if processed_bag:
+        data_topics = bags.get(processed_bag, {})
+        processed_required_topics = [
+            *required_topics,
+            *MARVIN_TCP_STATE_TOPICS,
+            *MARVIN_TCP_COMMAND_TOPICS,
+        ]
+        processed_required_topics.extend(processed_vision_topics)
+        for topic in processed_required_topics:
+            if data_topics.get(topic, {}).get("count", 0) == 0:
+                errors.append(f"processed topic has no messages: {topic}")
+    for bag_name, topics in bags.items():
+        for topic, item in topics.items():
+            if (
+                item["bag_time_regressions"]
+                or item["source_time_regressions"]
+                or item["sequence_gaps"]
+                or item.get("steady_alignment_errors", 0)
+                or item.get("metadata_missing", 0)
+                or item.get("metadata_orphans", 0)
+                or item.get("decode_errors", 0)
+            ):
+                degraded.append(f"{bag_name}:{topic}")
+    files = {
+        str(path.relative_to(episode_directory)): {
+            "size_bytes": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        for path in sorted(episode_directory.rglob("*"))
+        if path.is_file() and path.name != "manifest.json"
+    }
+    status = "rejected" if errors else "degraded" if degraded else "validated"
+    manifest = {
+        "schema_version": 1,
+        "validated_at_ns": time.time_ns(),
+        "status": status,
+        "errors": errors,
+        "degraded_topics": degraded,
+        "bags": bags,
+        "files": files,
+    }
+    write_json(episode_directory / "manifest.json", manifest)
+    return manifest

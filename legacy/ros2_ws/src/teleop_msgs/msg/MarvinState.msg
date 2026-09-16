@@ -1,0 +1,11 @@
+std_msgs/Header header
+uint64 sequence_id
+uint64 source_timestamp_ns
+uint64 receive_steady_ns
+bool valid
+uint64[2] frame_serial
+int32[2] arm_state
+int32[2] error_code
+bool[2] low_speed
+float64[14] q_rad
+float64[14] dq_rad_s

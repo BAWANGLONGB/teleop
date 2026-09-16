@@ -1,0 +1,9 @@
+std_msgs/Header header
+uint64 sequence_id
+uint64 source_timestamp_ns
+uint64 receive_steady_ns
+bool valid
+string side
+float64 distance_m
+float64 target_distance_m
+uint32 status_flags

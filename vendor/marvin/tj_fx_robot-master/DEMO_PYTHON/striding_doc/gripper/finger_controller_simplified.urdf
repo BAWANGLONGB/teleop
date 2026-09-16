@@ -1,0 +1,112 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="FingerController_urdf">
+  <link name="base_link">
+    <inertial>
+      <origin xyz="-0.0120606102391873 -0.000276601526733394 -0.0229397958275224" rpy="0 0 0" />
+      <mass value="0.0281521266992722" />
+      <inertia ixx="1.97240821968807E-05" ixy="3.54338575893735E-08" ixz="-2.48061339279387E-06" iyy="2.01942094152822E-05" iyz="-4.65760515813562E-08" izz="2.99806075388787E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/base_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="fflan_Link">
+    <inertial>
+      <origin xyz="0.0448497180156061 0.0169763635740017 -9.64809781988651E-05" rpy="0 0 0" />
+      <mass value="0.0426998697718406" />
+      <inertia ixx="3.31865036266034E-05" ixy="-6.2111284759859E-06" ixz="1.36524444034588E-07" iyy="5.07298417778471E-05" iyz="2.29067495184683E-08" izz="4.01899412725534E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/fflan_Link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/fflan_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="fflan_to_base" type="fixed">
+    <origin xyz="0.0708615418463922 0.0812149317453119 -0.0000482480870888924" rpy="-1.5707963267948966 0 0" />
+    <parent link="fflan_Link" />
+    <child link="base_link" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <link name="fleft_Link">
+    <inertial>
+      <origin xyz="0.0373952910033347 -0.00562275899912165 -0.0395477842913183" rpy="0 0 0" />
+      <mass value="0.0222777566423965" />
+      <inertia ixx="8.24250591185251E-06" ixy="-1.03072009385765E-07" ixz="5.61603873020945E-06" iyy="1.27675976099468E-05" iyz="1.23926225058668E-07" izz="5.38218211885671E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/fleft_Link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/fleft_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="fleft" type="revolute">
+    <origin xyz="0.00793885671580377 0.0292902518998249 -0.0344178755407507" rpy="1.5707963267949 0 0" />
+    <parent link="base_link" />
+    <child link="fleft_Link" />
+    <axis xyz="0 -0.999999999999966 0" />
+    <limit lower="0" upper="1" effort="1" velocity="1" />
+  </joint>
+  <link name="fright_Link">
+    <inertial>
+      <origin xyz="0.0373982883203603 -0.00562117111513777 0.0395407722712265" rpy="0 0 0" />
+      <mass value="0.0222746413340079" />
+      <inertia ixx="8.23820786150306E-06" ixy="-1.03525248494791E-07" ixz="-5.61239069024735E-06" iyy="1.27602097325754E-05" iyz="-1.24189697094109E-07" izz="5.37894196104843E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/fright_Link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.823529411764706 0.823529411764706 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="meshes/fright_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="fright" type="revolute">
+    <origin xyz="0.00793885671580385 -0.0293867480983751 -0.0344178755407507" rpy="1.5707963267949 0 0" />
+    <parent link="base_link" />
+    <child link="fright_Link" />
+    <axis xyz="0 -1 0" />
+    <limit lower="-1" upper="0" effort="1" velocity="1" />
+    <mimic joint="fleft" multiplier="-1" offset="0" />
+  </joint>
+</robot>

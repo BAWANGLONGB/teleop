@@ -1,0 +1,258 @@
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include <json-c/json.h>
+
+#include <PXREARobotSDK.h>
+
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <ctime>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+namespace py = pybind11;
+
+namespace
+{
+
+using Pose = std::array<double, 7>;
+using JsonObject = std::unique_ptr<json_object, decltype(&json_object_put)>;
+
+struct XrSnapshot
+{
+    int64_t sdk_receive_steady_ns = 0;
+    int64_t sdk_ready_steady_ns = 0;
+    int64_t sdk_parse_ns = 0;
+    int64_t sdk_callback_gap_ns = 0;
+    uint64_t sdk_callback_sequence = 0;
+    int64_t timestamp_ns;
+    Pose left_controller_pose;
+    Pose right_controller_pose;
+    std::array<double, 2> grip_values;
+    std::array<double, 2> trigger_values;
+    std::array<double, 2> thumbstick_y_values;
+    bool button_a;
+    bool button_b;
+    bool button_x;
+    bool button_y;
+};
+
+std::mutex snapshot_mutex;
+std::optional<XrSnapshot> latest_snapshot;
+std::mutex lifecycle_mutex;
+bool is_initialized = false;
+std::atomic<bool> parse_error_logged = false;
+
+int64_t monotonic_ns()
+{
+    timespec value{};
+    clock_gettime(CLOCK_MONOTONIC, &value);
+    return int64_t(value.tv_sec) * 1000000000LL + value.tv_nsec;
+}
+
+json_object* require_member(json_object* object, const char* name)
+{
+    json_object* value = nullptr;
+    if (object == nullptr || !json_object_object_get_ex(object, name, &value) ||
+        value == nullptr)
+    {
+        throw std::runtime_error(std::string("missing XR field: ") + name);
+    }
+    return value;
+}
+
+Pose parse_pose(json_object* object)
+{
+    const char* encoded_pose = json_object_get_string(require_member(object, "pose"));
+    if (encoded_pose == nullptr)
+    {
+        throw std::runtime_error("XR pose is not a string");
+    }
+
+    Pose pose{};
+    std::stringstream stream(encoded_pose);
+    std::string value;
+    for (double& coordinate : pose)
+    {
+        if (!std::getline(stream, value, ','))
+        {
+            throw std::runtime_error("XR pose does not contain seven values");
+        }
+        coordinate = std::stod(value);
+    }
+    if (std::getline(stream, value, ','))
+    {
+        throw std::runtime_error("XR pose contains more than seven values");
+    }
+    return pose;
+}
+
+JsonObject parse_json(const char* encoded_json)
+{
+    if (encoded_json == nullptr)
+    {
+        throw std::runtime_error("XR JSON is null");
+    }
+    JsonObject object(json_tokener_parse(encoded_json), &json_object_put);
+    if (!object)
+    {
+        throw std::runtime_error("invalid XR JSON");
+    }
+    return object;
+}
+
+XrSnapshot parse_snapshot(const PXREADevStateJson& device_state)
+{
+    JsonObject envelope = parse_json(device_state.stateJson);
+    const char* encoded_value =
+        json_object_get_string(require_member(envelope.get(), "value"));
+    JsonObject value = parse_json(encoded_value);
+
+    json_object* controllers = require_member(value.get(), "Controller");
+    json_object* left_controller = require_member(controllers, "left");
+    json_object* right_controller = require_member(controllers, "right");
+
+    XrSnapshot snapshot{};
+    snapshot.timestamp_ns =
+        json_object_get_int64(require_member(value.get(), "timeStampNs"));
+    snapshot.left_controller_pose = parse_pose(left_controller);
+    snapshot.right_controller_pose = parse_pose(right_controller);
+    snapshot.grip_values = {
+        json_object_get_double(require_member(left_controller, "grip")),
+        json_object_get_double(require_member(right_controller, "grip")),
+    };
+    snapshot.trigger_values = {
+        json_object_get_double(require_member(left_controller, "trigger")),
+        json_object_get_double(require_member(right_controller, "trigger")),
+    };
+    snapshot.thumbstick_y_values = {
+        json_object_get_double(require_member(left_controller, "axisY")),
+        json_object_get_double(require_member(right_controller, "axisY")),
+    };
+    snapshot.button_a =
+        json_object_get_boolean(require_member(right_controller, "primaryButton"));
+    snapshot.button_b =
+        json_object_get_boolean(require_member(right_controller, "secondaryButton"));
+    snapshot.button_x =
+        json_object_get_boolean(require_member(left_controller, "primaryButton"));
+    snapshot.button_y =
+        json_object_get_boolean(require_member(left_controller, "secondaryButton"));
+    if (snapshot.timestamp_ns <= 0)
+    {
+        throw std::runtime_error("XR timestamp is not positive");
+    }
+    return snapshot;
+}
+
+void on_client_callback(void*, PXREAClientCallbackType type, int, void* user_data)
+{
+    const int64_t received_ns = monotonic_ns();
+    if (type != PXREADeviceStateJson || user_data == nullptr)
+    {
+        return;
+    }
+
+    try
+    {
+        // Parse outside the lock; publish only a complete callback, never a partial frame.
+        XrSnapshot snapshot =
+            parse_snapshot(*static_cast<PXREADevStateJson*>(user_data));
+        snapshot.sdk_receive_steady_ns = received_ns;
+        snapshot.sdk_parse_ns = monotonic_ns() - received_ns;
+        std::lock_guard<std::mutex> lock(snapshot_mutex);
+        snapshot.sdk_ready_steady_ns = monotonic_ns();
+        snapshot.sdk_callback_sequence = latest_snapshot ? latest_snapshot->sdk_callback_sequence + 1 : 1;
+        snapshot.sdk_callback_gap_ns = latest_snapshot ? received_ns - latest_snapshot->sdk_receive_steady_ns : 0;
+        latest_snapshot = std::move(snapshot);
+    }
+    catch (const std::exception& error)
+    {
+        if (!parse_error_logged.exchange(true))
+        {
+            std::cerr << "XRoboToolkit snapshot rejected: " << error.what() << std::endl;
+        }
+    }
+}
+
+void initialize()
+{
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex);
+    if (is_initialized)
+    {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> snapshot_lock(snapshot_mutex);
+        latest_snapshot.reset();
+    }
+    parse_error_logged = false;
+    if (PXREAInit(nullptr, on_client_callback, PXREAFullMask) != 0)
+    {
+        throw std::runtime_error("PXREAInit failed");
+    }
+    is_initialized = true;
+}
+
+void close_sdk()
+{
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex);
+    if (!is_initialized)
+    {
+        return;
+    }
+    PXREADeinit();
+    is_initialized = false;
+    std::lock_guard<std::mutex> snapshot_lock(snapshot_mutex);
+    latest_snapshot.reset();
+}
+
+py::object get_snapshot()
+{
+    std::optional<XrSnapshot> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(snapshot_mutex);
+        snapshot = latest_snapshot;
+    }
+    if (!snapshot)
+    {
+        return py::none();
+    }
+
+    // Python allocation must not hold up the SDK callback's snapshot publication.
+    py::dict result;
+    result["timestamp_ns"] = snapshot->timestamp_ns;
+    result["left_controller_pose"] = snapshot->left_controller_pose;
+    result["right_controller_pose"] = snapshot->right_controller_pose;
+    result["grip_values"] = snapshot->grip_values;
+    result["trigger_values"] = snapshot->trigger_values;
+    result["thumbstick_y_values"] = snapshot->thumbstick_y_values;
+    result["button_a"] = snapshot->button_a;
+    result["button_b"] = snapshot->button_b;
+    result["button_x"] = snapshot->button_x;
+    result["button_y"] = snapshot->button_y;
+    py::dict timing;
+    timing["sdk_receive_steady_ns"] = snapshot->sdk_receive_steady_ns;
+    timing["sdk_ready_steady_ns"] = snapshot->sdk_ready_steady_ns;
+    timing["sdk_parse_ns"] = snapshot->sdk_parse_ns;
+    timing["sdk_callback_gap_ns"] = snapshot->sdk_callback_gap_ns;
+    timing["sdk_callback_sequence"] = snapshot->sdk_callback_sequence;
+    result["timing"] = timing;
+    return result;
+}
+
+} // namespace
+
+PYBIND11_MODULE(_xrobotoolkit_sdk, module)
+{
+    module.def("init", &initialize, "Initialize XRoboToolkit reception.");
+    module.def("close", &close_sdk, "Stop XRoboToolkit reception.");
+    module.def("get_snapshot", &get_snapshot, "Copy the latest complete PICO XR frame.");
+}
