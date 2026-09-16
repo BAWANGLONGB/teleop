@@ -569,8 +569,8 @@ function syncExportSelection() {
   all.indeterminate = visible.some((input) => input.checked) && !all.checked;
 }
 
-async function exportEpisodeMcaps(episodeIds, directory, request = fetch, variant = "h264") {
-  const label = variant === "h264" ? "H.264" : "MJPEG";
+async function exportEpisodeMcaps(episodeIds, directory, request = fetch, variant = "av1") {
+  const label = { av1: "AV1", h264: "H.264", mjpeg: "MJPEG" }[variant] || variant;
   for (const episodeId of episodeIds) {
     showToast(`正在打包 ${episodeId} 的 ${label} MCAP…`);
     const url = new URL("/api/exports/mcap", location.href);

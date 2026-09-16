@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline export of Foxglove MJPEG and/or H.264 MCAPs, only while collection is idle."""
+"""Offline export of Foxglove AV1, H.264, and/or MJPEG MCAPs while collection is idle."""
 
 import argparse
 import json
@@ -44,7 +44,10 @@ def main():
             saved = load_config(snapshot_path)
         else:
             saved = load_config()
-            saved["export"].update(metadata.get("video_outputs", {}))
+            saved_outputs = metadata.get("video_outputs", {})
+            saved["export"].update(saved_outputs)
+            if saved_outputs and "av1" not in saved_outputs:
+                saved["export"]["av1"] = False
         # Relocated episodes use their actual collection root for the idle lock.
         saved["paths"]["output_root"] = str(arguments.episode.parent.parent)
         config = apply_config(arguments, saved=saved)

@@ -109,13 +109,16 @@ class TestMarvinEntrypoints(unittest.TestCase):
         self.assertIn("--ready-file", commands["recorder"])
         self.assertIn("--calibration", commands["recorder"])
         self.assertIn("--preview-root", commands["recorder"])
-        self.assertIn("--mjpeg", commands["recorder"])
-        self.assertIn("--h264", commands["recorder"])
+        self.assertIn("--no-mjpeg", commands["recorder"])
+        self.assertIn("--no-h264", commands["recorder"])
+        self.assertIn("--av1", commands["recorder"])
         custom = namespace["parse_command_line_arguments"](
-            [*command_line, "--no-mjpeg", "--h264-crf", "28", "--h264-threads", "1"]
+            [*command_line, "--h264", "--no-av1", "--h264-crf", "28", "--h264-threads", "1"]
         )
         custom_command = namespace["_build_commands"](custom)["recorder"]
         self.assertIn("--no-mjpeg", custom_command)
+        self.assertIn("--h264", custom_command)
+        self.assertIn("--no-av1", custom_command)
         self.assertEqual(custom_command[custom_command.index("--h264-crf") + 1], "28")
         self.assertEqual(custom_command[custom_command.index("--h264-threads") + 1], "1")
         self.assertEqual(

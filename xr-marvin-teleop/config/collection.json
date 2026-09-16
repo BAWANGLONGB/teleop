@@ -51,7 +51,10 @@
     "export_nice": 10
   },
   "export": {
-    "mjpeg": true, "h264": true, "h264_crf": 18,
-    "h264_preset": "veryfast", "h264_keyint": 30, "h264_threads": 2
+    "mjpeg": true,
+    "h264": true, "h264_crf": 23,
+    "h264_preset": "veryfast", "h264_keyint": 30, "h264_threads": 2,
+    "av1": true, "av1_crf": 30,
+    "av1_preset": 8, "av1_keyint": 60, "av1_threads": 2
   }
 }

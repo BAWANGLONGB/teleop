@@ -23,6 +23,7 @@ class TestCollectionConfig(unittest.TestCase):
     def test_interpolation_config_and_legacy_capture(self):
         config = load_config()
         self.assertEqual(config["robot"]["joint_command_max_speed_deg_s"], 100.0)
+        self.assertTrue(config["export"]["av1"])
         for value in (0, -1, True, None, float("nan"), float("inf")):
             invalid = deepcopy(config)
             invalid["robot"]["joint_command_max_speed_deg_s"] = value
@@ -31,6 +32,18 @@ class TestCollectionConfig(unittest.TestCase):
         del config["robot"]["joint_command_max_speed_deg_s"]
         restored = apply_config(argparse.Namespace(), saved=config)
         self.assertNotIn("joint_command_max_speed_deg_s", restored["robot"])
+        config["export"]["h264"] = True
+        for name in ("av1", "av1_crf", "av1_preset", "av1_keyint", "av1_threads"):
+            config["export"].pop(name)
+        restored = apply_config(argparse.Namespace(), saved=config)
+        self.assertFalse(restored["export"]["av1"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old-full-config.json"
+            path.write_text(json.dumps(config))
+            restored = load_config(path)
+            validate_config(restored)
+            self.assertFalse(restored["export"]["av1"])
 
     def test_layers_paths_switches_and_validation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -51,6 +64,7 @@ class TestCollectionConfig(unittest.TestCase):
             self.assertEqual(config["paths"]["calibrations"], [str(root / "extra.json")])
             self.assertTrue(args.no_vision)
             self.assertFalse(args.h264)
+            self.assertTrue(args.av1)
             self.assertEqual(args.h264_crf, 29)
             self.assertEqual(config["paths"]["das_config"], str(DEFAULT_CONFIG.parent / "das_gripper.example.json"))
             self.assertEqual(config["robot"]["gripper_mode"], "binary")
@@ -63,7 +77,8 @@ class TestCollectionConfig(unittest.TestCase):
             for text in ('{"export":{"h264":true,"h264":false}}',
                          '{"export":{"h264_pers et":"fast"}}',
                          '{"enable_hardware":true}', '{"paths":{"output_root":null}}',
-                         '{"export":{"h264":"false"}}', '{"capture":{"pico_poll_hz":NaN}}',
+                         '{"export":{"h264":"false"}}', '{"export":{"av1_crf":64}}',
+                         '{"capture":{"pico_poll_hz":NaN}}',
                          '{"runtime":{"cpus":{"hardware":[true]}}}'):
                 path.write_text(text)
                 with self.assertRaises(ValueError, msg=text):
@@ -211,6 +226,7 @@ class TestCollectionConfig(unittest.TestCase):
             self.assertEqual(metadata["episode_id"], "episode_120000_deadbeef")
             self.assertEqual(metadata["export_status"], "pending")
             self.assertFalse(metadata["capture_config"]["export"]["h264"])
+            self.assertTrue(metadata["capture_config"]["export"]["av1"])
             self.assertTrue((metadata_path.parent / metadata["config_snapshot"]).is_file())
             self.assertTrue(metadata["config_files"])
 

@@ -155,7 +155,7 @@
                 <li>在“数采结果标注”选择段落并标为成功或失败，也可补标历史段。正常结束的未标注段默认成功；“清除标注”恢复默认成功，异常中断不会自动收录。</li>
                 <li>设备就绪且未录制时，左手柄 <code>Y</code> 将本次 UI 后台运行中最近一段已结束录制移入回收站，可恢复；再次按 Y 不会继续删除更早段落。</li>
                 <li>手柄启动或重连后先松开按键再按；长按不重复，X/Y 同按、启动或保存期间不执行。关闭浏览器后仍可按最近同步配置操作，UI 后台必须保持运行。</li>
-                <li>停止录制仅保存原始数据。在“数据集”搜索或按 Session 筛选，勾选段落，选择 <code>.h264.mcap</code> 或 <code>.mjpeg.mcap</code>，点击“打包并导出”，使用 Chrome / Edge 选择保存目录。此时才生成所选格式，已有文件直接下载；打包期间不能开始录制，设备可保持运行。失败时原始数据保留供重试。</li>
+                <li>停止录制仅保存原始数据。在“数据集”搜索或按 Session 筛选，勾选段落，选择 <code>.av1.mcap</code>、<code>.h264.mcap</code> 或 <code>.mjpeg.mcap</code>，点击“打包并导出”，使用 Chrome / Edge 选择保存目录。此时才生成所选格式，已有文件直接下载；打包期间不能开始录制，设备可保持运行。失败时原始数据保留供重试。</li>
                 <li>数据集支持打开段落目录和移入回收站；历史视频暂不支持页内播放，可使用 Foxglove 查看最终 MCAP。</li>
               </ol>
             </section>
@@ -187,7 +187,7 @@
       <section class="view" id="view-datasets">
         <div class="page-heading"><div><p class="eyebrow">DATA LIBRARY</p><h1>数据集</h1><p>检索并导出标准化 Episode。</p></div><button class="button primary small" data-nav="workbench"><svg><use href="#i-play"/></svg>新建采集</button></div>
         <article class="panel dataset-browser">
-          <div class="dataset-tools"><label class="search"><svg><use href="#i-search"/></svg><input id="episodeSearch" placeholder="搜索 Episode 或任务"></label><label class="session-filter">Session<select id="sessionFilter"><option value="">全部 Session</option></select></label><label class="session-filter">导出格式<select id="exportFormat"><option value="h264">.h264.mcap</option><option value="mjpeg">.mjpeg.mcap</option></select></label><button class="button secondary export-button" id="exportMcap" disabled><svg><use href="#i-data"/></svg><span id="exportLabel">打包并导出</span> <span id="exportCount" aria-live="polite">0</span></button><span id="datasetSummary">等待加载真实数据…</span></div>
+          <div class="dataset-tools"><label class="search"><svg><use href="#i-search"/></svg><input id="episodeSearch" placeholder="搜索 Episode 或任务"></label><label class="session-filter">Session<select id="sessionFilter"><option value="">全部 Session</option></select></label><label class="session-filter">导出格式<select id="exportFormat"><option value="av1">.av1.mcap</option><option value="h264">.h264.mcap</option><option value="mjpeg">.mjpeg.mcap</option></select></label><button class="button secondary export-button" id="exportMcap" disabled><svg><use href="#i-data"/></svg><span id="exportLabel">打包并导出</span> <span id="exportCount" aria-live="polite">0</span></button><span id="datasetSummary">等待加载真实数据…</span></div>
           <div class="table-wrap"><table><thead><tr><th><label class="episode-choice"><input type="checkbox" id="selectAllEpisodes" aria-label="选择全部可见 Episode"><span>Episode</span></label></th><th>任务</th><th>创建时间</th><th>模态</th><th>时长</th><th>人工结果</th><th></th></tr></thead><tbody id="datasetRows"><tr><td colspan="7">等待加载真实数据…</td></tr></tbody></table></div>
         </article>
       </section>
@@ -226,6 +226,6 @@
   </dialog>
 
   <div class="toast" id="toast" role="status"><svg><use href="#i-check"/></svg><span>链路检测完成，全部正常</span></div>
-  <script src="app.js?v=20260904-4"></script>
+  <script src="app.js?v=20260915-1"></script>
 </body>
 </html>

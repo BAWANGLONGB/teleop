@@ -34,7 +34,7 @@ from xr_marvin_teleop.common.episode_review import (
     SESSION_ID, new_episode_id, session_path, session_record, save_session, read_review, save_review,
     episode_path as session_episode_path, annotation_lock,
 )
-from xr_marvin_teleop.common.episode_video import activity_lock
+from xr_marvin_teleop.common.episode_video import VIDEO_VARIANTS, activity_lock
 
 COLLECTION_CONFIG_PATH = DEFAULT_CONFIG
 COLLECTION_SETTINGS = validate_config(load_config())
@@ -178,16 +178,16 @@ def open_episode_directory(dataset_root, episode_id, opener=None, launch=None):
     return path
 
 
-def mcap_export_files(dataset_root, episode_ids, variant="h264"):
-    if variant not in ("h264", "mjpeg"):
-        raise ApiError(HTTPStatus.BAD_REQUEST, "导出格式只能是 h264 或 mjpeg")
+def mcap_export_files(dataset_root, episode_ids, variant="av1"):
+    if variant not in VIDEO_VARIANTS:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "导出格式只能是 av1、h264 或 mjpeg")
     episode_ids = list(dict.fromkeys(episode_ids))
     if len(episode_ids) != 1:
         raise ApiError(HTTPStatus.BAD_REQUEST, "每次只能导出一段 Episode")
     episode_id = episode_ids[0]
     episode = episode_path(dataset_root, episode_id, prefer_directory=True)
     if episode.is_file():
-        raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, f"{episode_id} 是旧格式，请先迁移并生成 H.264 MCAP")
+        raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, f"{episode_id} 是旧格式，请先迁移并生成 AV1 MCAP")
     path = episode / "final" / f"{episode_id}.{variant}.mcap"
     if path.parent.is_symlink() or path.is_symlink() or path.resolve().parent != episode.resolve() / "final":
         raise ApiError(HTTPStatus.BAD_REQUEST, f"{episode_id} {variant} 数据路径无效")
@@ -198,7 +198,7 @@ def mcap_export_files(dataset_root, episode_ids, variant="h264"):
 
 
 def prepare_mcap_export(payload):
-    variant = payload.get("format", "h264")
+    variant = payload.get("format", "av1")
     episode_id = payload.get("episode")
     if not isinstance(episode_id, str) or not EPISODE_RE.fullmatch(episode_id):
         raise ApiError(HTTPStatus.BAD_REQUEST, "Episode ID 格式无效")
@@ -221,11 +221,14 @@ def prepare_mcap_export(payload):
             raise ApiError(HTTPStatus.CONFLICT, "本段未正常结束，不能打包")
         log_path = episode / "export.log"
         command = [str(TELEOP_PYTHON), str(PROJECT_ROOT / "scripts/data/postprocess_episode.py"),
-                   str(episode), "--output-root", str(DATASET_ROOT), "--add-missing",
-                   "--h264" if variant == "h264" else "--no-h264",
-                   "--mjpeg" if variant == "mjpeg" else "--no-mjpeg"]
-        if variant == "h264":
-            for name in ("h264_crf", "h264_preset", "h264_keyint", "h264_threads"):
+                   str(episode), "--output-root", str(DATASET_ROOT), "--add-missing"]
+        command.extend(
+            f"--{name}" if variant == name else f"--no-{name}"
+            for name in VIDEO_VARIANTS
+        )
+        if variant in ("h264", "av1"):
+            for suffix in ("crf", "preset", "keyint", "threads"):
+                name = f"{variant}_{suffix}"
                 command += ["--" + name.replace("_", "-"), str(COLLECTION_SETTINGS["export"][name])]
         with log_path.open("ab", buffering=0) as log:
             result = subprocess.run(command, cwd=PROJECT_ROOT, env=teleop_environment(),
@@ -1074,7 +1077,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_mcap_export(self, episode_ids, variant="h264"):
+    def send_mcap_export(self, episode_ids, variant="av1"):
         _episode_id, path = mcap_export_files(DATASET_ROOT, episode_ids, variant)[0]
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/octet-stream")
@@ -1135,7 +1138,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_preview(preview.group(1))
         if request.path == "/api/exports/mcap":
             query = parse_qs(request.query)
-            return self.handle_api(lambda: self.send_mcap_export(query.get("episode", []), query.get("format", ["h264"])[0]))
+            return self.handle_api(lambda: self.send_mcap_export(query.get("episode", []), query.get("format", ["av1"])[0]))
         if request.path == "/api/status":
             usage = shutil.disk_usage(DATASET_ROOT if DATASET_ROOT.exists() else PROJECT_ROOT)
             return self.send_json({
@@ -1282,19 +1285,19 @@ def self_test():
         mjpeg.write_bytes(b"mjpeg")
         try:
             mcap_export_files(root, [blocked.name])
-            raise AssertionError("raw/MJPEG MCAP was exported without H264")
+            raise AssertionError("raw/MJPEG MCAP was exported without AV1")
         except ApiError as error:
             assert error.status == HTTPStatus.UNPROCESSABLE_ENTITY
-        h264 = blocked / "final" / f"{blocked.name}.h264.mcap"
-        h264.symlink_to(mjpeg)
+        av1 = blocked / "final" / f"{blocked.name}.av1.mcap"
+        av1.symlink_to(mjpeg)
         try:
             mcap_export_files(root, [blocked.name])
-            raise AssertionError("symlink H264 export was accepted")
+            raise AssertionError("symlink AV1 export was accepted")
         except ApiError as error:
             assert error.status == HTTPStatus.BAD_REQUEST
-        h264.unlink()
-        h264.write_bytes(b"h264")
-        assert mcap_export_files(root, [blocked.name]) == [(blocked.name, h264)]
+        av1.unlink()
+        av1.write_bytes(b"av1")
+        assert mcap_export_files(root, [blocked.name]) == [(blocked.name, av1)]
         packaged_mcap = root / "session_2026-09-03" / "data/chunk-000/episode_000000.mcap"
         packaged_mcap.parent.mkdir(parents=True)
         packaged_meta = Path(temporary) / "meta.json"
@@ -1311,7 +1314,7 @@ def self_test():
         ))
         try:
             mcap_export_files(root, ["episode_120002_01234567"])
-            raise AssertionError("legacy attachment MCAP was exported as H264")
+            raise AssertionError("legacy attachment MCAP was exported as AV1")
         except ApiError as error:
             assert error.status == HTTPStatus.UNPROCESSABLE_ENTITY
         assert episode_record(packaged_mcap)["size_bytes"] == packaged_mcap.stat().st_size
@@ -1352,7 +1355,7 @@ def self_test():
             ("meta/meta.json", "application/json", packaged_meta),
             ("data/data.parquet", "application/vnd.apache.parquet", packaged_data),
         ))
-        assert mcap_export_files(root, [blocked.name]) == [(blocked.name, h264)]
+        assert mcap_export_files(root, [blocked.name]) == [(blocked.name, av1)]
     print("Server self-check passed")
 
 

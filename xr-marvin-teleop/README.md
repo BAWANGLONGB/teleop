@@ -178,7 +178,7 @@ Trigger 或摇杆后拉闭合，摇杆前推张开，输入释放后保持。
 
 数采设置统一放在 [`config/collection.json`](config/collection.json)：`paths` 管理路径，
 `robot` 管理连接、映射与 `gripper_mode`，`capture` 管理模态/采样，`recording` 管理话题/缓存/ROS bag 配置，
-`preview` 管理预览，`runtime` 管理 CPU/nice/超时，`export` 管理双 MCAP 与 H.264 参数。
+`preview` 管理预览，`runtime` 管理 CPU/nice/超时，`export` 管理 AV1 默认输出及兼容格式参数。
 左右相机的分辨率/FPS、触觉频率和夹爪标定仍只在主配置引用的 DAS JSON 中设置；ROS 原生 YAML 保留。
 使用前必须核对 `robot.model` 与实机型号，配置不能替代本次安全确认。
 
@@ -187,7 +187,7 @@ Trigger 或摇杆后拉闭合，摇杆前推张开，输入释放后保持。
 python scripts/data/run_collection.py --print-effective-config
 # 可选局部配置覆盖默认文件；显式 CLI 的优先级最高
 python scripts/data/run_collection.py --config config/collection.local.json \
-  --print-effective-config --no-mjpeg --h264-crf 28
+  --print-effective-config --av1-crf 30
 ```
 
 局部 JSON 只需包含要修改的字段；未知字段、重复键和类型错误会报错。字典按字段覆盖，数组整体替换。
@@ -196,7 +196,7 @@ python scripts/data/run_collection.py --config config/collection.local.json \
 `--unlimited-duration` 可清除配置中的最长录制时长。
 
 启动前复制主配置引用的 DAS、标定、URDF、ROS YAML 到快照；运行中不热更新。
-Episode 的 `config/collection.json`、`config/files.json` 与文件快照会内嵌到两个最终 MCAP。
+Episode 的 `config/collection.json`、`config/files.json` 与文件快照会内嵌到每个最终 MCAP。
 `--part devices` 运行时固定设备参数；新录制若修改机器人、夹爪或 PICO 相关设置会拒绝启动，
 相机配置（由 recorder 持有）及离线编码参数允许逐段变化。互斥/核对以同一 `output_root` 为边界。
 
@@ -305,44 +305,47 @@ python scripts/data/record_episode.py \
 
 在线阶段在临时 `dataset/session_<date>/episode_<time>_<id>/` 中写入 `state/`、
 `vision_left/`、`vision_right/` 三个隔离 bag。停止后先关闭原始文件，标记 `export_status=pending`，
-UI / `run_collection.py` 不自动打包。在数据集页面勾选段落，选择 `.h264.mcap` 或 `.mjpeg.mcap`，
-点击“打包并导出”并选择保存目录，此时才生成所选格式。已生成的格式直接下载，另一格式可随后补生成，已有文件不覆盖。
+UI / `run_collection.py` 不自动打包。在数据集页面勾选段落，选择 `.av1.mcap`、`.h264.mcap` 或 `.mjpeg.mcap`，
+点击“打包并导出”并选择保存目录，此时才生成所选格式。已生成的格式直接下载，其他格式可随后补生成，已有文件不覆盖。
 打包期间不能录制，设备可保持运行；失败显示错误，原始数据保留。也可在录制停止后使用命令行：
 
 ```bash
-python -m pip install -e '.[h264]'
+python -m pip install -e '.[video]'
 python scripts/data/postprocess_episode.py dataset/session_<date>/episode_<time>_<id>
 ```
 
-Episode 的 `final/` 下默认只有两个最终文件，每个都包含完整状态/指令/触觉、FK TCP、
-双路图像，以及元数据/校准附件，无需外部 MP4 或 Parquet：
+Episode 的 `final/` 默认只生成 AV1 文件；H.264 和原始 MJPEG 可按需兼容导出。
+每个文件都包含完整状态/指令/触觉、FK TCP、双路图像，以及元数据/校准附件：
 
 ```text
-final/episode_<time>_<id>.mjpeg.mcap  # 原始 JPEG 字节，sensor_msgs/msg/CompressedImage
-final/episode_<time>_<id>.h264.mcap   # Annex B，foxglove.CompressedVideo
+final/episode_<time>_<id>.av1.mcap    # 默认，Low Overhead OBU，foxglove.CompressedVideo
+final/episode_<time>_<id>.h264.mcap   # 可选兼容，Annex B，foxglove.CompressedVideo
+final/episode_<time>_<id>.mjpeg.mcap  # 可选原始 JPEG，sensor_msgs/msg/CompressedImage
 ```
 
 三个入口 `run_collection.py`、`record_episode.py`、`postprocess_episode.py` 均支持
-`--no-mjpeg` / `--no-h264`（至少开启一种）。H.264 参数：`--h264-crf 23`（1–51，越低画质越高）、
-`--h264-preset veryfast`、`--h264-keyint 60`（帧）、`--h264-threads 2`（1–16）。
+`--av1` / `--no-av1`、`--mjpeg` / `--no-mjpeg`、`--h264` / `--no-h264`（至少开启一种）。
+AV1 参数：`--av1-crf 30`（0–63，越低画质越高）、`--av1-preset 8`（0–13，越高越快）、
+`--av1-keyint 60`（帧）、`--av1-threads 2`（1–16）。H.264 参数继续兼容。
 后处理默认继承录制参数，也可通过命令行覆盖。关闭 MJPEG 最终输出不会取消转码需要的临时 JPEG。
 新 Episode 的后处理默认使用录制快照，不读取已更改的公共采集设置；历史无快照 Episode 保持兼容。
 离线 `--config` 只接受 `export` 和 `runtime.export_nice` 的局部覆盖，CLI 仍支持 `--urdf` 等原有接口。
 原始设置保存在 `capture_config` / `video_outputs`，实际导出参数另存为 `export_options` / `export_config`。
-H.264 固定无 B 帧，每个消息一个完整 AU，每个 IDR 带 SPS/PPS。
+AV1 使用 Low Overhead Bitstream，每个消息包含一帧所需 OBU，关键帧带 Sequence Header OBU；
+编码缓存按 PTS 落入临时 SQLite，再按原始采集时间写 MCAP。H.264 保持无 B 帧和 IDR SPS/PPS。
 消息布局遵循 [Foxglove CompressedVideo 规范](https://docs.foxglove.dev/docs/sdk/schemas/compressed-video)。
 
 导出以低 CPU 优先级执行，并通过同一 `--output-root` 下的互斥锁拒绝与录制并行运行；
 设备模式 `--part devices` 独立运行，不阻止保存。导出期间新录制会快速报忙，UI 打包期间启动新录制会报忙。
 原始 bag 保留用于恢复和重新调参，
 确认最终结果后可人工归档/清理；已有 `final/` 不会被覆盖；CLI 使用 `--add-missing` 可补生成缺失格式。
-两个文件都可直接在 Foxglove 的 Image 面板选择相应 `image/compressed` 或 `video/compressed` 话题。
-旧 LeRobot 解包工具保留用于历史文件；UI 按所选格式先打包，再下载 `final/<episode_id>.h264.mcap` 或 `.mjpeg.mcap`。
+所有启用格式都可直接在 Foxglove 的 Image 面板选择相应 `image/compressed` 或 `video/compressed` 话题。
+旧 LeRobot 解包工具保留用于历史文件；UI 按所选格式先打包，再下载 `final/<episode_id>.<format>.mcap`。
 
 历史 Session 可批量迁移（先停止采集并 source ROS2 环境）：
 
 ```bash
-python -m pip install -e '.[h264,lerobot]'  # pyarrow 仅用于读取旧附件包
+python -m pip install -e '.[video,lerobot]'  # pyarrow 仅用于读取旧附件包
 python scripts/data/migrate_sessions.py dataset/session_2026-09-04 dataset/session_2026-09-09 \
   --replace --allow-lossy-legacy --backup-root dataset/.migration-backup-20260910
 ```
@@ -375,7 +378,7 @@ python scripts/data/collect_successful_mcaps.py --output dataset/successful_v1 -
 python scripts/data/collect_successful_mcaps.py --output dataset/successful_v1
 ```
 
-脚本收录人工成功，以及未标注且状态为 `completed/validated/degraded` 的段落，复制到 `h264/` 和 `mjpeg/`，
+脚本收录人工成功，以及未标注且状态为 `completed/validated/degraded` 的段落，按启用格式复制到 `av1/`、`h264/` 和 `mjpeg/`，
 文件名附带 Session ID，避免跨 Session 重名。`manifest.json` 保留原路径、名称、人工结果和 SHA-256。
 源文件不移动；人工失败、未结束、回收站和备份不会收录。被明确关闭的格式可缺省，
 仍启用但未生成的格式会报错，需先离线导出。整批复制成功后才发布输出目录；
@@ -415,7 +418,7 @@ JSONL 的 `q_desired_rad` 记录插值前目标，`q_command_rad` 记录发送�
 python -m unittest discover -s tests -v
 ```
 
-完整集成测试需要 ROS2、`ros-humble-foxglove-msgs` 和 `.[h264]` 依赖；缺少时相关项会明确跳过：
+完整集成测试需要 ROS2、`ros-humble-foxglove-msgs` 和 `.[video]` 依赖；缺少时相关项会明确跳过：
 
 ```bash
 source /opt/ros/humble/setup.bash

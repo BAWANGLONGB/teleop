@@ -21,7 +21,7 @@ from xr_marvin_teleop.hardware.interface.das_finger import (
 from xr_marvin_teleop.ros.das_client import RosDasClient
 from xr_marvin_teleop.ros.pico_client import RosPicoClient
 from xr_marvin_teleop.common.episode_video import (
-    activity_lock, add_video_arguments, video_options,
+    VIDEO_VARIANTS, activity_lock, add_video_arguments, video_options,
 )
 from xr_marvin_teleop.common.marvin_scale_calibration import resolve_scale_factor
 from xr_marvin_teleop.common.episode_review import EPISODE_ID, session_path
@@ -232,7 +232,7 @@ def _build_recorder_command(arguments, python):
         if value:
             recorder.extend(("--" + key.replace("_", "-"), value))
     for key, value in video_options(arguments).items():
-        if key in ("mjpeg", "h264"):
+        if key in VIDEO_VARIANTS:
             recorder.append(f"--{key}" if value else f"--no-{key}")
         else:
             recorder.extend(("--" + key.replace("_", "-"), str(value)))

@@ -41,7 +41,8 @@ ARG_FIELDS = {
     "startup_timeout": ("runtime", "startup_timeout_s"),
     "camera_startup_timeout": ("runtime", "camera_startup_timeout_s"),
     **{name: ("export", name) for name in (
-        "mjpeg", "h264", "h264_crf", "h264_preset", "h264_keyint", "h264_threads")},
+        "mjpeg", "h264", "h264_crf", "h264_preset", "h264_keyint", "h264_threads",
+        "av1", "av1_crf", "av1_preset", "av1_keyint", "av1_threads")},
 }
 PROCESSES = ("hardware", "pico", "das_left", "das_right", "recorder")
 # Types/field names are the contract; actual default values live only in JSON.
@@ -65,8 +66,28 @@ CONFIG_SCHEMA = {
         "cpus": {key: list for key in PROCESSES}, "nice": {key: int for key in PROCESSES},
         "shutdown_timeout_s": {key: float for key in PROCESSES},
     },
-    "export": {"mjpeg": bool, "h264": bool, "h264_crf": int, "h264_preset": str,
-               "h264_keyint": int, "h264_threads": int},
+    "export": {
+        "mjpeg": bool,
+        "h264": bool,
+        "h264_crf": int,
+        "h264_preset": str,
+        "h264_keyint": int,
+        "h264_threads": int,
+        "av1": bool,
+        "av1_crf": int,
+        "av1_preset": int,
+        "av1_keyint": int,
+        "av1_threads": int,
+    },
+}
+
+
+LEGACY_AV1_DEFAULTS = {
+    "av1": False,
+    "av1_crf": 30,
+    "av1_preset": 8,
+    "av1_keyint": 60,
+    "av1_threads": 2,
 }
 
 
@@ -122,11 +143,18 @@ def load_config(path=None, *, saved=None):
     """Merge one override into defaults or saved capture settings, without mutating either."""
     # Only one optional override file. Paths retain the base of their source file.
     config = read_json(DEFAULT_CONFIG) if saved is None else deepcopy(saved)
+    if saved is not None and "av1" not in config.get("export", {}):
+        config["export"].update(LEGACY_AV1_DEFAULTS)
     if saved is None:
         _resolve_paths(config, DEFAULT_CONFIG.parent)
     if path is not None:
         path = Path(path).expanduser().resolve()
         patch = read_json(path)
+        if (
+            patch.keys() == config.keys()
+            and "av1" not in patch.get("export", {})
+        ):
+            patch["export"].update(LEGACY_AV1_DEFAULTS)
         _resolve_paths(patch, path.parent)
         _merge(config, patch)
     return config

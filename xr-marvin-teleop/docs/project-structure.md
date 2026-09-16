@@ -69,7 +69,7 @@ xr-marvin-teleop/
 | `common/episode_postprocessor.py` | 合并在线 MCAP 分片，保留采集系统时间并由关节流生成 TCP 6D pose |
 | `common/collection_config.py` | 统一数采配置、CLI 覆盖、路径/类型校验、文件快照和活动设备配置核对 |
 | `config/collection.json` | 数采默认参数唯一来源，引用既有 DAS JSON 和 ROS YAML |
-| `common/episode_video.py` | 离线 Foxglove MJPEG/H.264 双 MCAP 导出、编码参数和采集互斥锁 |
+| `common/episode_video.py` | 离线 Foxglove AV1/H.264/MJPEG 导出、编码参数和采集互斥锁 |
 | `common/episode_validator.py` | 离线检查 MCAP 话题、频率、时间回退、序号缺口和文件哈希 |
 | `common/episode_package.py` | 旧 LeRobot MCAP 的附件读写、CRC 校验和安全解包；供历史文件与 UI 使用 |
 | `ros2_ws/src/teleop_msgs` | 仅为旧 Episode 离线迁移保留；新采集使用标准 ROS2 / Foxglove 类型 |
@@ -87,7 +87,7 @@ xr-marvin-teleop/
 | `tests/test_marvin_simulation.py` | headless MuJoCo 与真实厂家 IK 集成回归 |
 | `tests/test_collection_config.py` | 配置优先级、路径解析、快照和设备配置一致性 |
 | `tests/test_episode_postprocessor.py` | 时间戳选择、URDF FK、原生 MJPEG、旧附件兼容与校验 |
-| `tests/test_episode_video.py` | 导出互斥、双 MCAP 内容、H.264 解码和失败恢复 |
+| `tests/test_episode_video.py` | 导出互斥、AV1/H.264/MJPEG 内容、解码和失败恢复 |
 
 ## 3. 最小闭环
 
@@ -204,10 +204,10 @@ XR 暂时失效的周期仍记录保持目标，XR 输入字段为 `null`。完�
 | `dataset/**/final/` | 离线导出结果，不覆盖已存在目录；重新导出前先移走旧结果 |
 | `ros2_ws/build/`、`install/`、`log/` | 旧消息包 colcon 生成内容，Git 忽略；仅旧数据迁移需 source |
 
-新采集的唯一最终导出入口是 `scripts/data/postprocess_episode.py`，输出 Foxglove MJPEG/H.264 MCAP。
+新采集的唯一最终导出入口是 `scripts/data/postprocess_episode.py`，默认输出 Foxglove AV1 MCAP，并兼容 MJPEG/H.264。
 旧 `package_episode()` 自动转 Parquet/MP4 并删除原始目录的流程已移除；附件工具继续服务历史文件及 UI。
 `review_episode.py` 读取合并后的 ROS bag 目录，`extract_episode_mcap.py` 只处理旧 LeRobot 附件格式。
 `migrate_sessions.py` 是单独的历史数据迁移入口，不由采集启动流程调用。
 
-修改后运行 `python -m unittest discover -s tests -v`；视频集成项需要 source ROS2 和消息工作区并安装 `.[h264]`。
+修改后运行 `python -m unittest discover -s tests -v`；视频集成项需要 source ROS2 和消息工作区并安装 `.[video]`。
 只校验数采设置可用 `python scripts/data/run_collection.py --print-effective-config`，不会连接硬件。

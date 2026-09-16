@@ -23,7 +23,7 @@ class TestMigration(unittest.TestCase):
                 (work / "metadata.json").write_text(original)
                 (work / "final").mkdir()
                 outputs = [work / "final" / f"episode_test.{variant}.mcap"
-                           for variant in ("mjpeg", "h264")]
+                           for variant in ("mjpeg", "h264", "av1")]
                 for output in outputs:
                     output.write_bytes(b"test output")
                 return outputs
@@ -50,10 +50,17 @@ class TestMigration(unittest.TestCase):
                 with patch("scripts.data.migrate_sessions.verify", return_value=checked):
                     result = migrate(source, session, {"export": {}}, backup, True)
                 self.assertEqual((Path(result["backup"]) / "metadata.json").read_text(), original)
-                self.assertEqual(len(list((source / "final").glob("*.mcap"))), 2)
+                self.assertEqual(len(list((source / "final").glob("*.mcap"))), 3)
                 self.assertEqual(json.loads((source / "metadata.json").read_text())["export_status"], "completed")
                 manifest = json.loads((source / "manifest.json").read_text())
-                self.assertEqual(set(manifest["files"]), {"final/episode_test.mjpeg.mcap", "final/episode_test.h264.mcap"})
+                self.assertEqual(
+                    set(manifest["files"]),
+                    {
+                        "final/episode_test.mjpeg.mcap",
+                        "final/episode_test.h264.mcap",
+                        "final/episode_test.av1.mcap",
+                    },
+                )
 
 
 if __name__ == "__main__":

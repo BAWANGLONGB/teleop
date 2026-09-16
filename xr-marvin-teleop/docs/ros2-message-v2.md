@@ -6,7 +6,7 @@ Episode 的 `message_protocol_version=2`；配置文件自身的 `schema_version
 ```bash
 sudo apt-get install ros-humble-foxglove-msgs ros-humble-rosbag2-storage-mcap
 source /opt/ros/humble/setup.bash
-python -m pip install -e '.[h264]'
+python -m pip install -e '.[video]'
 ```
 
 ## 数据契约
@@ -66,9 +66,10 @@ TCP 使用 URDF 的 world 系，不将 world 与 base_link 当成同一坐标系
 ## 打包与历史迁移
 
 原始 bag 和后处理 bag 均为 ROS 2 CDR，内含标准类型及 Foxglove Grid。
-最终 `.mjpeg.mcap` 保留 `sensor_msgs/msg/CompressedImage`；`.h264.mcap` 中视频为
+最终默认 `.av1.mcap`，并可选生成 `.mjpeg.mcap`、`.h264.mcap`。AV1/H.264 视频均为
 `foxglove.CompressedVideo` Protobuf，话题 `/raw/das/{side}/video/compressed`，对应采样诊断也重命名。
-H.264 沿用 Annex B、无 B 帧、每个消息一帧、IDR 带 SPS/PPS，时间戳逐帧保持不变。
+AV1 使用 Low Overhead Bitstream，每个消息包含一帧所需 OBU，关键帧带 Sequence Header OBU；
+H.264 沿用 Annex B、无 B 帧、每个消息一帧、IDR 带 SPS/PPS。时间戳逐帧保持不变。
 最终 MCAP 内嵌 schema、配置和标定，不声明纯 ros2 profile。
 
 旧消息定义只为离线迁移保留在 `ros2_ws/src/teleop_msgs`，运行时不依赖它。迁移到一个新目录：
@@ -135,4 +136,4 @@ ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=191 python tests/ros_v2_live_check.py
 ```
 
 测试不连接硬件。覆盖序列化往返、关节顺序、四元数奇异位置、触觉字节完整性、PICO 配对、
-夹爪标定、原始 bag→FK→双 MCAP、H.264 解码与失败恢复。
+夹爪标定、原始 bag→FK→AV1/H.264/MJPEG MCAP、视频解码与失败恢复。

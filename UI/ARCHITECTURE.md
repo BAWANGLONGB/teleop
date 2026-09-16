@@ -20,7 +20,7 @@
                        ▼
           State MCAP + Vision L/R MCAP
                        │
-       系统时间戳 → 校验 → 离线 MJPEG/H.264 双 MCAP
+       系统时间戳 → 校验 → 离线 AV1（默认）或兼容格式 MCAP
                        │
                        ▼
 dataset/session_<稳定 ID>/
@@ -29,6 +29,7 @@ dataset/session_<稳定 ID>/
         ├── metadata.json
         ├── review.json            人工成功/失败/未标注
         └── final/
+              ├── episode_….av1.mcap
               ├── episode_….h264.mcap
               └── episode_….mjpeg.mcap
 ```
@@ -56,7 +57,7 @@ Session 命名与结果按钮位于采集作业台；结果请求为 `{session, 
 不覆盖机器校验状态、不重写 MCAP；录制/保存中的本段不可标注。
 显示名称位于 `session.json`，重命名不移动目录。UI 为本段预分配 ID，
 通过 `--session/--episode-id` 传给录制器，避免将结果误标到另一段。
-批量成功数据整理见项目 `scripts/data/collect_successful_mcaps.py`，输出分为 `h264/`、`mjpeg/` 和来源清单。
+批量成功数据整理见项目 `scripts/data/collect_successful_mcaps.py`，输出分为 `av1/`、`h264/`、`mjpeg/` 和来源清单。
 
 左手柄 X 切换录制、Y 将本次 UI 后台运行中最近一段已结束录制移入回收站。
 现有 PICO 发布器读取左手 primaryButton/secondaryButton，通过非阻塞 Unix datagram 发往 UI 后台独立线程；
@@ -85,7 +86,7 @@ POST   /api/episodes/{id}/open       通过系统文件管理器打开 MCAP 所�
 DELETE /api/episodes/{id}            原子移动至 dataset/.trash/
 ```
 
-下载请求按 `format=h264|mjpeg` 流式返回 `final/<episode_id>.<format>.mcap`。浏览器先 POST `{episode, format}` 等待打包完成，再 GET 下载；多段依次处理，不生成整批临时副本。打包使用既有后处理脚本、录制快照和独占录制锁，低优先级运行；设备模式不占用该锁。
+下载请求按 `format=av1|h264|mjpeg` 流式返回 `final/<episode_id>.<format>.mcap`，默认 AV1。浏览器先 POST `{episode, format}` 等待打包完成，再 GET 下载；多段依次处理，不生成整批临时副本。打包使用既有后处理脚本、录制快照和独占录制锁，低优先级运行；设备模式不占用该锁。
 
 `POST /api/episodes` 接受 `run_collection.py` 已存在的参数：`task`、`operator`、`robot_model`、`max_duration`、`no_vision`、`nsp_lateral` 和标定文件引用。DAS SDK 使用 `camera_resolutions` 和 `camera_fps`：帧率固定设置为 60 FPS，实际采集帧率约 30 FPS；当前 TeleOp 配置为 `1600x1296@60`。UI 保留两种已知分辨率，生产 API 再通过 `v4l2-ctl --list-formats-ext` 校验左右相机均支持 60 FPS。
 
@@ -124,7 +125,7 @@ IDLE → STARTING_DEVICES → DEVICES_READY → RECORDING → FINALIZING → DEV
 
 ## 已实现范围
 
-当前脚本已接入状态、数据列表、回收站删除、PICO 探测/重连、相机能力、单作业采集启停、Session 命名、人工结果标注与按需 H.264/MJPEG MCAP 打包下载。页面内历史视频播放仍未接入；没有跨采集站调度需求前不引入消息队列、微服务或数据库。
+当前脚本已接入状态、数据列表、回收站删除、PICO 探测/重连、相机能力、单作业采集启停、Session 命名、人工结果标注与按需 AV1/H.264/MJPEG MCAP 打包下载。页面内历史视频播放仍未接入；没有跨采集站调度需求前不引入消息队列、微服务或数据库。
 
 ## 运行
 

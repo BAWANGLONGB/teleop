@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Migrate historical episodes, verify both MCAPs, then archive originals on --replace."""
+"""Migrate historical episodes, verify selected MCAPs, then archive originals on --replace."""
 
 import argparse
 import base64
@@ -25,7 +25,14 @@ from xr_marvin_teleop.common.collection_config import load_config, write_json
 from xr_marvin_teleop.common.episode_package import extract_episode_mcap, read_attachment
 from xr_marvin_teleop.common.episode_postprocessor import postprocess_episode
 from xr_marvin_teleop.common.episode_validator import validate_episode
-from xr_marvin_teleop.common.episode_video import H264Encoder, activity_lock, export_episode, protobuf_schema
+from xr_marvin_teleop.common.episode_video import (
+    Av1Encoder,
+    H264Encoder,
+    activity_lock,
+    av1_obu_types,
+    export_episode,
+    protobuf_schema,
+)
 from xr_marvin_teleop.ros.protocol import (
     ARM_NAMES,
     DAS_COMPRESSED_IMAGE_TOPICS,
@@ -49,7 +56,7 @@ def verify(path):
     from foxglove_schemas_protobuf.CompressedVideo_pb2 import CompressedVideo
     from xr_marvin_teleop.common.episode_video import h264_nal_types
 
-    counts, decoders = Counter(), {}
+    counts, decoders, decoder_formats, decoded_frames = Counter(), {}, {}, Counter()
     with Path(path).open("rb") as stream:
         reader = make_reader(stream, validate_crcs=True)
         for schema, channel, message in reader.iter_messages():
@@ -67,12 +74,17 @@ def verify(path):
                     timestamp = value.timestamp.ToNanoseconds()
                 if timestamp != message.log_time:
                     raise ValueError("image and MCAP timestamps differ")
-                codec = "mjpeg" if value.format == "jpeg" else "h264"
+                codec = "mjpeg" if value.format == "jpeg" else value.format
+                if codec not in ("mjpeg", "h264", "av1"):
+                    raise ValueError(f"unsupported video format: {codec}")
                 if channel.topic not in decoders:
-                    decoders[channel.topic] = av.CodecContext.create(codec, "r")
+                    decoder_name = "libdav1d" if codec == "av1" else codec
+                    decoders[channel.topic] = av.CodecContext.create(decoder_name, "r")
                     decoders[channel.topic].thread_count = 1
+                    decoder_formats[channel.topic] = codec
                 frames = decoders[channel.topic].decode(av.Packet(bytes(value.data)))
-                if len(frames) != 1:
+                decoded_frames[channel.topic] += len(frames)
+                if codec != "av1" and len(frames) != 1:
                     raise ValueError("video message does not decode to exactly one frame")
                 if codec == "h264":
                     if frames[0].pict_type == av.video.frame.PictureType.B:
@@ -82,10 +94,22 @@ def verify(path):
                         independent.thread_count = 1
                         if len(independent.decode(av.Packet(value.data))) != 1:
                             raise ValueError("IDR is not independently decodable")
+                elif codec == "av1" and 1 in av1_obu_types(value.data):
+                    independent = av.CodecContext.create("libdav1d", "r")
+                    independent.thread_count = 1
+                    frames = independent.decode(av.Packet(value.data))
+                    frames += independent.decode(None)
+                    if len(frames) != 1:
+                        raise ValueError("AV1 keyframe is not independently decodable")
             elif channel.message_encoding == "json":
                 json.loads(message.data)
-        for decoder in decoders.values():
-            if decoder.decode(None):
+        for topic, decoder in decoders.items():
+            flushed = decoder.decode(None)
+            if decoder_formats[topic] == "av1":
+                decoded_frames[topic] += len(flushed)
+                if decoded_frames[topic] != counts[topic]:
+                    raise ValueError("AV1 decoded frame count differs from messages")
+            elif flushed:
                 raise ValueError("unexpected buffered video frames")
         attachments = {a.name: a.data for a in reader.iter_attachments()}
         metadata = json.loads(attachments["meta/meta.json"])
@@ -180,7 +204,11 @@ def convert_legacy(source, work, config):
     final = work / "final"
     final.mkdir()
     outputs = []
-    for variant, message_type in (("mjpeg", CompressedImage), ("h264", CompressedVideo)):
+    for variant, message_type in (
+        ("mjpeg", CompressedImage),
+        ("h264", CompressedVideo),
+        ("av1", CompressedVideo),
+    ):
         if not config["export"][variant]:
             continue
         target = final / f"{metadata['episode_id']}.{variant}.mcap"
@@ -209,7 +237,13 @@ def convert_legacy(source, work, config):
                 if len(times) != video["frames"]:
                     raise ValueError("legacy video timestamp count mismatch")
                 offset = original["source_metadata"].get("postprocessing", {}).get("alignment", {}).get("topic_time_offsets_ns", {}).get(current_image_topic, 0)
-                h264 = H264Encoder(config["export"], max(1, round(video["fps"]))) if variant == "h264" else None
+                video_encoder = (
+                    H264Encoder(config["export"], max(1, round(video["fps"])))
+                    if variant == "h264"
+                    else Av1Encoder(config["export"], max(1, round(video["fps"])))
+                    if variant == "av1"
+                    else None
+                )
                 jpeg = None
                 path = (extracted / video["path"]).resolve()
                 if not path.is_relative_to(extracted):
@@ -219,8 +253,10 @@ def convert_legacy(source, work, config):
                     for index, frame in enumerate(container.decode(video=0)):
                         if index >= len(times):
                             raise ValueError("more decoded frames than timestamps")
-                        if h264 is not None:
-                            payload = h264.encode_frame(frame)
+                        if variant == "h264":
+                            packets = [(index, video_encoder.encode_frame(frame))]
+                        elif variant == "av1":
+                            packets = video_encoder.encode_frame(frame)
                         else:
                             if jpeg is None:
                                 jpeg = av.CodecContext.create("mjpeg", "w")
@@ -233,16 +269,44 @@ def convert_legacy(source, work, config):
                             packets = jpeg.encode(frame)
                             if len(packets) != 1:
                                 raise ValueError("MJPEG encoder buffered a frame")
-                            payload = bytes(packets[0])
-                        stamp = base + round(float(times[index]) * 1e9) + int(offset or 0)
-                        value = message_type(frame_id=f"finger_{side}_camera", format="jpeg" if variant == "mjpeg" else "h264", data=payload)
+                            packets = [(index, bytes(packets[0]))]
+                        for frame_index, payload in packets:
+                            stamp = base + round(float(times[frame_index]) * 1e9) + int(offset or 0)
+                            value = message_type(
+                                frame_id=f"finger_{side}_camera",
+                                format="jpeg" if variant == "mjpeg" else variant,
+                                data=payload,
+                            )
+                            value.timestamp.FromNanoseconds(stamp)
+                            writer.add_message(
+                                channel,
+                                stamp,
+                                value.SerializeToString(),
+                                stamp,
+                                sequence=frame_index,
+                            )
+                            counts[topic] += 1
+                if variant == "av1":
+                    for frame_index, payload in video_encoder.finish():
+                        stamp = base + round(float(times[frame_index]) * 1e9) + int(offset or 0)
+                        value = message_type(
+                            frame_id=f"finger_{side}_camera",
+                            format=variant,
+                            data=payload,
+                        )
                         value.timestamp.FromNanoseconds(stamp)
-                        writer.add_message(channel, stamp, value.SerializeToString(), stamp, sequence=index)
+                        writer.add_message(
+                            channel,
+                            stamp,
+                            value.SerializeToString(),
+                            stamp,
+                            sequence=frame_index,
+                        )
                         counts[topic] += 1
                 if counts[topic] != len(times):
                     raise ValueError("decoded video frame count mismatch")
-                if h264 is not None:
-                    h264.finish()
+                if variant == "h264":
+                    video_encoder.finish()
                 elif jpeg is not None and jpeg.encode(None):
                     raise ValueError("unexpected delayed JPEG frames")
             output_metadata = {**metadata, "video_variant": variant, "export_options": config["export"], "topic_counts": dict(counts)}

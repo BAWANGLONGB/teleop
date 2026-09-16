@@ -12,6 +12,8 @@ dependencies = ["mujoco", "numpy", "mcap>=1.2", "foxglove-schemas-protobuf>=0.3"
 
 [project.optional-dependencies]
 h264 = ["av>=12"]
+av1 = ["av>=12"]
+video = ["av>=12"]
 lerobot = ["pyarrow>=14"]
 
 [tool.setuptools.packages.find]

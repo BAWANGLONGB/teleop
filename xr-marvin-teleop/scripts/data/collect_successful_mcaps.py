@@ -14,7 +14,7 @@ from xr_marvin_teleop.common.collection_config import load_config, read_json, wr
 from xr_marvin_teleop.common.episode_review import (
     EPISODE_ID, annotation_lock, episode_path, read_review, session_path, session_record,
 )
-from xr_marvin_teleop.common.episode_video import activity_lock
+from xr_marvin_teleop.common.episode_video import VIDEO_VARIANTS, activity_lock
 
 
 def collection_plan(root):
@@ -37,12 +37,12 @@ def collection_plan(root):
                 raise ValueError(f"成功标注对应未结束段落：{episode}")
             options = metadata.get("export_options", metadata.get("video_outputs", {}))
             files, disabled = [], []
-            for variant in ("h264", "mjpeg"):
+            for variant in VIDEO_VARIANTS:
                 source = episode / "final" / f"{episode.name}.{variant}.mcap"
                 if source.parent.is_symlink() or source.is_symlink() or source.resolve().parent != episode / "final":
                     raise ValueError(f"不安全的 MCAP 路径：{source}")
                 if not source.is_file():
-                    (disabled if options.get(variant) is False else missing).append(str(source))
+                    (missing if options.get(variant) is True else disabled).append(str(source))
                     continue
                 files.append({"source": str(source),
                               "destination": f"{variant}/{session.name}__{source.name}",
@@ -76,7 +76,7 @@ def collect(root, destination, dry_run=False):
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".collect-success-", dir=destination.parent) as temporary:
             staging = Path(temporary) / "ready"
-            for variant in ("h264", "mjpeg"):
+            for variant in VIDEO_VARIANTS:
                 (staging / variant).mkdir(parents=True)
             for entry in plan["episodes"]:
                 for file in entry["files"]:

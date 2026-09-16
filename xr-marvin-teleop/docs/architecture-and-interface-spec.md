@@ -385,7 +385,7 @@ Marvin SDK 回调/轮询   → /raw/marvin/joint_state
                                       ↓
                    保留采集系统时间、TCP FK、完整性校验（离线）
                                       ↓
-                   final/*.mjpeg.mcap + final/*.h264.mcap
+                   final/*.av1.mcap（默认）+ 可选 H.264/MJPEG
 ```
 
 消息协议已切换为 [ROS2 / Foxglove v2](ros2-message-v2.md)。每个消息流的独立 `sequence_id`
@@ -401,7 +401,7 @@ V4L2 原生 MJPEG 写入 `vision_left/`、`vision_right/`，不经过解码、�
 录制结束只关闭原始文件并标记 `export_status=pending`。设备停止后，
 `scripts/data/postprocess_episode.py` 合并数据到 `data/`，按关节名读取反馈/目标并计算左右 TCP PoseStamped（xyz+xyzw），
 校验通过后离线生成所选最终格式。每个文件包含完整状态、命令、触觉、TCP 和双路图像；
-状态沿用 ROS2 CDR，MJPEG 使用 sensor_msgs/CompressedImage，H.264 使用 Foxglove CompressedVideo Protobuf。
+状态沿用 ROS2 CDR，MJPEG 使用 sensor_msgs/CompressedImage，AV1/H.264 使用 Foxglove CompressedVideo Protobuf。
 `meta/meta.json`、标定和采集配置快照作为附件内嵌。完成 CRC 和消息数量检查后，整组文件
 原子发布到 `final/`；已有输出不覆盖，原始 Episode 不自动删除。
 

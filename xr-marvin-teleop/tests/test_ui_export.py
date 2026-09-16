@@ -111,14 +111,22 @@ class TestUiExport(unittest.TestCase):
                 with self.assertRaises(ui.ApiError):
                     ui.move_episode_to_trash(ui.DATASET_ROOT, episode.name)
                 self.assertIn("--add-missing", command)
-                variant = "mjpeg" if "--mjpeg" in command else "h264"
-                self.assertIn("--no-h264" if variant == "mjpeg" else "--no-mjpeg", command)
-                for name in ("h264_crf", "h264_preset", "h264_keyint", "h264_threads"):
-                    flag = "--" + name.replace("_", "-")
-                    if variant == "h264":
-                        self.assertEqual(command[command.index(flag) + 1], str(ui.COLLECTION_SETTINGS["export"][name]))
-                    else:
-                        self.assertNotIn(flag, command)
+                variant = next(
+                    name for name in ui.VIDEO_VARIANTS if f"--{name}" in command
+                )
+                for name in ui.VIDEO_VARIANTS:
+                    self.assertIn(
+                        f"--{name}" if name == variant else f"--no-{name}",
+                        command,
+                    )
+                for codec in ("h264", "av1"):
+                    for suffix in ("crf", "preset", "keyint", "threads"):
+                        name = f"{codec}_{suffix}"
+                        flag = "--" + name.replace("_", "-")
+                        if variant == codec:
+                            self.assertEqual(command[command.index(flag) + 1], str(ui.COLLECTION_SETTINGS["export"][name]))
+                        else:
+                            self.assertNotIn(flag, command)
                 (episode / "final").mkdir(exist_ok=True)
                 (episode / "final" / f"{episode.name}.{variant}.mcap").write_bytes(variant.encode())
                 return Mock(returncode=0)
@@ -130,21 +138,25 @@ class TestUiExport(unittest.TestCase):
                 payload["format"] = "h264"
                 ui.prepare_mcap_export(payload)
                 self.assertEqual(run.call_count, 2)
+                payload["format"] = "av1"
+                ui.prepare_mcap_export(payload)
+                self.assertEqual(run.call_count, 3)
                 self.assertEqual(ui.mcap_export_files(ui.DATASET_ROOT, [episode.name], "mjpeg")[0][1].read_bytes(), b"mjpeg")
                 self.assertEqual(ui.mcap_export_files(ui.DATASET_ROOT, [episode.name], "h264")[0][1].read_bytes(), b"h264")
+                self.assertEqual(ui.mcap_export_files(ui.DATASET_ROOT, [episode.name], "av1")[0][1].read_bytes(), b"av1")
                 with self.assertRaises(ui.ApiError):
                     ui.prepare_mcap_export({**payload, "format": "../bad"})
-                h264 = episode / "final" / f"{episode.name}.h264.mcap"
-                h264.unlink()
+                av1 = episode / "final" / f"{episode.name}.av1.mcap"
+                av1.unlink()
                 with patch.object(ui, "collection_active", return_value=True):
                     with self.assertRaises(ui.ApiError):
                         ui.prepare_mcap_export(payload)
-                self.assertEqual(run.call_count, 2)
+                self.assertEqual(run.call_count, 3)
                 run.side_effect = None
                 run.return_value = Mock(returncode=1)
                 with self.assertRaises(ui.ApiError):
                     ui.prepare_mcap_export(payload)
-                self.assertFalse(h264.exists())
+                self.assertFalse(av1.exists())
                 self.assertEqual(raw.read_bytes(), b"original")
                 self.assertFalse(ui.START_LOCK.locked())
                 self.assertFalse(ui.EXPORT_LOCK.locked())
