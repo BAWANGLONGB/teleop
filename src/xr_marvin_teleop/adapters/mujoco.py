@@ -5,7 +5,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from xr_marvin_teleop.hardware.interface.marvin import MarvinRobotState
+from .marvin import MarvinRobotState
 
 
 MARVIN_MUJOCO_JOINT_NAMES = tuple(

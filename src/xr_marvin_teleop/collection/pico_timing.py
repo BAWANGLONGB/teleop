@@ -12,7 +12,11 @@ import time
 
 class PicoTimingLog:
     def __init__(self, name, directory=None):
-        directory = Path(directory) if directory is not None else Path(__file__).resolve().parents[2] / "logs"
+        directory = (
+            Path(directory)
+            if directory is not None
+            else Path(__file__).resolve().parents[3] / "var" / "logs"
+        )
         self.path = directory / f"pico_timing_{name}_{os.getpid()}_{time.time_ns()}.jsonl"
         self._queue = queue.Queue(maxsize=1024)
         self._stop = threading.Event()

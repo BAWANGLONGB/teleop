@@ -120,7 +120,7 @@ def trajectory(values, names, timestamp_ns):
 
 
 def gripper_targets(message, configurations):
-    from xr_marvin_teleop.hardware.interface.das_finger import closedness_to_das_distances
+    from ..adapters.das_finger import closedness_to_das_distances
     values = joint_positions(message, GRIPPER_NAMES)
     if len(configurations) != 2:
         raise ValueError("two gripper calibrations are required")

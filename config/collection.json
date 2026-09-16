@@ -22,10 +22,10 @@
   "capture": {"vision_enabled": true, "pico_poll_hz": 120.0, "max_duration_s": null},
   "recording": {
     "state_cache_bytes": 268435456,
-    "state_storage": "data_collection/mcap_state.yaml",
-    "camera_storage": "data_collection/mcap_mjpeg.yaml",
-    "processed_storage": "data_collection/mcap_vision.yaml",
-    "qos": "data_collection/qos_overrides.yaml",
+    "state_storage": "ros/mcap_state.yaml",
+    "camera_storage": "ros/mcap_mjpeg.yaml",
+    "processed_storage": "ros/mcap_vision.yaml",
+    "qos": "ros/qos_overrides.yaml",
     "state_topics": [
       "/raw/pico/poses", "/raw/pico/joy", "/raw/pico/status",
       "/raw/marvin/joint_state", "/raw/marvin/joint_state/status",

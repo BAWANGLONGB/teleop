@@ -11,9 +11,9 @@ from pathlib import Path
 
 import numpy as np
 
-from .collection_config import write_json
+from .config import write_json
 from .episode_validator import sha256_file
-from xr_marvin_teleop.ros.protocol import (
+from ..ros.protocol import (
     DIAGNOSTICS_TOPIC,
     JOINT_NAMES,
     MARVIN_JOINT_COMMAND_TOPIC,
@@ -24,11 +24,9 @@ from xr_marvin_teleop.ros.protocol import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_URDF = PROJECT_ROOT / "assets" / "marvin" / "marvin_dual.urdf"
-DEFAULT_STORAGE_CONFIG = (
-    PROJECT_ROOT / "config" / "data_collection" / "mcap_vision.yaml"
-)
+DEFAULT_STORAGE_CONFIG = PROJECT_ROOT / "config" / "ros" / "mcap_vision.yaml"
 DERIVED_TOPICS = {
     MARVIN_JOINT_STATE_TOPIC: MARVIN_TCP_STATE_TOPICS,
     MARVIN_JOINT_COMMAND_TOPIC: MARVIN_TCP_COMMAND_TOPICS,

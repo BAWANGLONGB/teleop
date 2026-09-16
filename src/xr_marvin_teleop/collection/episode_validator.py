@@ -6,8 +6,8 @@ import time
 import sqlite3
 from pathlib import Path
 
-from .collection_config import write_json
-from xr_marvin_teleop.ros.protocol import (
+from .config import write_json
+from ..ros.protocol import (
     ARM_NAMES,
     DAS_COMPRESSED_IMAGE_TOPICS,
     DAS_IMAGE_TOPICS,

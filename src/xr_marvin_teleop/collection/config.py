@@ -10,8 +10,8 @@ import math
 from pathlib import Path
 
 
-from .marvin_scale_calibration import ensure_scale_calibration
-from xr_marvin_teleop.ros.protocol import (
+from ..control.calibration import ensure_scale_calibration
+from ..ros.protocol import (
     MARVIN_JOINT_COMMAND_TOPIC,
     MARVIN_JOINT_STATE_TOPIC,
     PICO_STATUS_TOPIC,
@@ -20,7 +20,9 @@ from xr_marvin_teleop.ros.protocol import (
 )
 
 
-DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config/collection.json"
+DEFAULT_CONFIG = (
+    Path(__file__).resolve().parents[3] / "config" / "collection.json"
+)
 PATH_FIELDS = {
     "paths": {"output_root", "das_config", "das_sdk_root", "scale_calibration", "urdf", "calibrations"},
     "recording": {"state_storage", "camera_storage", "processed_storage", "qos"},
@@ -370,7 +372,7 @@ def freeze_arguments(arguments, directory, *, require_devices=True):
 def device_contract(config):
     """Identify settings owned by persistent devices; recording/export may vary per episode."""
     from dataclasses import asdict
-    from xr_marvin_teleop.hardware.interface.das_finger import load_das_finger_configurations
+    from ..adapters.das_finger import load_das_finger_configurations
     configurations = load_das_finger_configurations(config["paths"]["das_config"])
     # Cameras belong to each recorder, not the persistent DAS device processes.
     hardware = {

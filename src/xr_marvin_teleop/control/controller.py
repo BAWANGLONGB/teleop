@@ -4,13 +4,13 @@ import time
 
 import numpy as np
 
-from xr_marvin_teleop.common.marvin_scale_calibration import (
+from .calibration import (
     ArmLengthScaleCalibrator,
     resolve_scale_factor,
     save_scale_calibration,
 )
-from xr_marvin_teleop.common.marvin_postures import MARVIN_INITIAL_POSE_Q_RAD
-from xr_marvin_teleop.common.xr_target_mapper import (
+from .postures import MARVIN_INITIAL_POSE_Q_RAD
+from .mapping import (
     XrTargetMapper,
     transform_controller_poses_to_marvin_frame,
 )

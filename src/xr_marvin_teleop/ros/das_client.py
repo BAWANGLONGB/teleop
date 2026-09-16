@@ -17,7 +17,7 @@ from .protocol import (
     trajectory,
 )
 
-from xr_marvin_teleop.hardware.interface.das_finger import (
+from ..adapters.das_finger import (
     ARM_NAMES,
     DASFingerConfiguration,
     closedness_to_das_distances,

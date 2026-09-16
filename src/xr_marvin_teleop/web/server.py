@@ -22,19 +22,19 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 
-UI_ROOT = Path(__file__).resolve().parent
-WORKSPACE = UI_ROOT.parent
-PROJECT_ROOT = WORKSPACE / "xr-marvin-teleop"
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+SOURCE_ROOT = PROJECT_ROOT / "src"
+WORKSPACE = PROJECT_ROOT
+UI_ROOT = PROJECT_ROOT / "ui"
+LOG_ROOT = PROJECT_ROOT / "var" / "logs"
 
-from xr_marvin_teleop.common.episode_package import read_attachment, write_episode_mcap
-from xr_marvin_teleop.common.collection_config import DEFAULT_CONFIG, load_config, validate_config
-from xr_marvin_teleop.common.episode_review import (
+from xr_marvin_teleop.collection.episode_package import read_attachment, write_episode_mcap
+from xr_marvin_teleop.collection.config import DEFAULT_CONFIG, load_config, validate_config
+from xr_marvin_teleop.collection.episode_review import (
     SESSION_ID, new_episode_id, session_path, session_record, save_session, read_review, save_review,
     episode_path as session_episode_path, annotation_lock,
 )
-from xr_marvin_teleop.common.episode_video import VIDEO_VARIANTS, activity_lock
+from xr_marvin_teleop.collection.episode_video import VIDEO_VARIANTS, activity_lock
 
 COLLECTION_CONFIG_PATH = DEFAULT_CONFIG
 COLLECTION_SETTINGS = validate_config(load_config())
@@ -110,7 +110,7 @@ def teleop_environment():
         key, separator, value = item.partition(b"=")
         if separator:
             environment[os.fsdecode(key)] = os.fsdecode(value)
-    environment["PYTHONPATH"] = os.pathsep.join(filter(None, (str(PROJECT_ROOT), environment.get("PYTHONPATH"))))
+    environment["PYTHONPATH"] = os.pathsep.join(filter(None, (str(SOURCE_ROOT), environment.get("PYTHONPATH"))))
     environment.pop("LD_PRELOAD", None)
     return environment
 
@@ -749,7 +749,7 @@ def request_robot_reset(payload):
             raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "机器人复位脚本或 Python 环境缺失")
         environment = os.environ.copy()
         environment["PYTHONPATH"] = os.pathsep.join(
-            filter(None, (str(PROJECT_ROOT), environment.get("PYTHONPATH")))
+            filter(None, (str(SOURCE_ROOT), environment.get("PYTHONPATH")))
         )
         environment.pop("LD_PRELOAD", None)
         try:
@@ -885,7 +885,7 @@ def _start_collection(payload, part):
     command.append("--no-vision" if no_vision else "--vision")
     if "nsp_lateral" in payload:
         command.append("--nsp-lateral" if payload["nsp_lateral"] else "--no-nsp-lateral")
-    log_path = PROJECT_ROOT / "logs" / f"ui_{part}_{datetime.now():%Y%m%d_%H%M%S}.log"
+    log_path = LOG_ROOT / f"ui_{part}_{datetime.now():%Y%m%d_%H%M%S}.log"
     log_path.parent.mkdir(exist_ok=True)
     with log_path.open("ab", buffering=0) as log:
         try:
@@ -988,7 +988,7 @@ def _restart_pico():
     if not ROBOTICS_SERVICE_SCRIPT.is_file():
         raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "Robotics Service 启动脚本不存在")
     service_started = False
-    service_log = PROJECT_ROOT / "logs" / "ui_robotics_service.log"
+    service_log = LOG_ROOT / "ui_robotics_service.log"
     service_log.parent.mkdir(exist_ok=True)
     ports = robotics_service_ports()
     if pico_ports_ready(ports):

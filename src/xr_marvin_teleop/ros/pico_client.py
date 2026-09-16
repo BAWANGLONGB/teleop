@@ -3,8 +3,8 @@
 import threading
 import time
 
-from xr_marvin_teleop.common.xr_client import XrSnapshot
-from xr_marvin_teleop.common.pico_timing import PicoTimingLog
+from ..adapters.xr import XrSnapshot
+from ..collection.pico_timing import PicoTimingLog
 from . import spin_until_stopped
 from .protocol import PICO_TOPIC_PREFIX, SampleJoiner, pose_values, stamp_ns
 

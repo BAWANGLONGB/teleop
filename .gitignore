@@ -13,6 +13,7 @@
 .teleop-git/
 .agents/
 .codex/
+.ai-memory/*/
 .codex_docx_review/
 .sync-backup-20260826/
 .pytest_cache/

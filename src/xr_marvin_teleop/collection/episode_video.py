@@ -13,8 +13,8 @@ import re
 import sqlite3
 import tempfile
 
-from .collection_config import DEFAULT_CONFIG, read_json
-from xr_marvin_teleop.ros.protocol import (
+from .config import DEFAULT_CONFIG, read_json
+from ..ros.protocol import (
     DAS_COMPRESSED_IMAGE_STATUS_TOPICS,
     DAS_COMPRESSED_IMAGE_TOPICS,
 )

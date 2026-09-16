@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 
-from .collection_config import read_json, write_json
+from .config import read_json, write_json
 from .episode_video import activity_lock
 
 EPISODE_ID = re.compile(r"episode_\d{6}_[0-9a-f]{8}\Z")
