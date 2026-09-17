@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.data.migrate_sessions import migrate
+from xr_marvin_teleop.cli.migrate import migrate
 
 
 class TestMigration(unittest.TestCase):
@@ -35,19 +35,19 @@ class TestMigration(unittest.TestCase):
                     raise OSError("publication failed")
                 return rename(path, target)
 
-            with patch("scripts.data.migrate_sessions.convert_raw", side_effect=convert):
-                with patch("scripts.data.migrate_sessions.verify", side_effect=ValueError("bad CRC")):
+            with patch("xr_marvin_teleop.cli.migrate.convert_raw", side_effect=convert):
+                with patch("xr_marvin_teleop.cli.migrate.verify", side_effect=ValueError("bad CRC")):
                     with self.assertRaisesRegex(ValueError, "bad CRC"):
                         migrate(source, session, {"export": {}}, backup, True)
                 self.assertEqual((source / "metadata.json").read_text(), original)
                 self.assertFalse(backup.exists())
                 checked = {"counts": {"/test": 1}, "bytes": 11, "sha256": "test"}
-                with patch("scripts.data.migrate_sessions.verify", return_value=checked), \
+                with patch("xr_marvin_teleop.cli.migrate.verify", return_value=checked), \
                      patch.object(Path, "rename", fail_publish):
                     with self.assertRaisesRegex(OSError, "publication failed"):
                         migrate(source, session, {"export": {}}, backup, True)
                 self.assertEqual((source / "metadata.json").read_text(), original)
-                with patch("scripts.data.migrate_sessions.verify", return_value=checked):
+                with patch("xr_marvin_teleop.cli.migrate.verify", return_value=checked):
                     result = migrate(source, session, {"export": {}}, backup, True)
                 self.assertEqual((Path(result["backup"]) / "metadata.json").read_text(), original)
                 self.assertEqual(len(list((source / "final").glob("*.mcap"))), 3)

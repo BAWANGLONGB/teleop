@@ -24,6 +24,7 @@
 .vscode/
 
 # Generated runtime data and build outputs
+/var/
 **/logs/
 **/build/
 **/install/
@@ -36,6 +37,9 @@
 *.csv
 *.npz
 *.npy
+
+# Optional external SDK snapshots
+/vendor/gen_finger_con_python_sdk_release/
 
 # Vendor archives and CAD exports are kept outside the Git project.
 *.zip
@@ -68,7 +72,6 @@ TJArm/tj_fx_robot-master/SDK_PYTHON/libMarvinSDK.so
 /xr-marvin-teleop/dataset/
 /gen_finger_con_python_sdk_release/
 /gen_finger_con_ros2_sdk_release/
-
 
 # Keep current Marvin teleoperation logs in the cloud snapshot.
 # !/xr-marvin-teleop/logs/

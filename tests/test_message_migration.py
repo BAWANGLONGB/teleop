@@ -2,7 +2,6 @@
 import hashlib
 import json
 from pathlib import Path
-import runpy
 import tempfile
 import unittest
 
@@ -17,10 +16,10 @@ class TestMessageMigration(unittest.TestCase):
             from foxglove_msgs.msg import Grid
         except ImportError as error:
             self.skipTest(f"legacy migration dependencies unavailable: {error}")
-        from xr_marvin_teleop.hardware.interface.das_finger import DASFingerConfiguration
+        from xr_marvin_teleop.adapters.das_finger import DASFingerConfiguration
         from xr_marvin_teleop.ros.protocol import GRIPPER_NAMES, joint_positions
-        from xr_marvin_teleop.common.episode_postprocessor import postprocess_episode
-        migrate = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/data/migrate_messages_v2.py"))["migrate"]
+        from xr_marvin_teleop.collection.episode_postprocessor import postprocess_episode
+        from xr_marvin_teleop.cli.migrate_messages import migrate
         configs = (DASFingerConfiguration("/dev/l", "/dev/cl", 0.01, 0.07),
                    DASFingerConfiguration("/dev/r", "/dev/cr", 0.01, 0.07, invert=True))
         with tempfile.TemporaryDirectory() as directory:

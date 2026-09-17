@@ -37,7 +37,7 @@ class TestMarvinRosData(unittest.TestCase):
 
         stale_sdk = FakeXrSdk([7])
         with patch("builtins.print"), patch(
-            "xr_marvin_teleop.common.xr_client.time.monotonic_ns",
+            "xr_marvin_teleop.adapters.xr.time.monotonic_ns",
             side_effect=(100, 102, 103),
         ):
             stale_client = XrClient(

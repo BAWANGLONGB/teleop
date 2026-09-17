@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from xr_marvin_teleop.common.episode_video import (
+from xr_marvin_teleop.collection.episode_video import (
     activity_lock,
     add_video_arguments,
     av1_obu_types,
@@ -19,7 +19,7 @@ from xr_marvin_teleop.common.episode_video import (
     h264_nal_types,
     video_options,
 )
-from xr_marvin_teleop.common.collection_config import load_config, snapshot_config, read_json
+from xr_marvin_teleop.collection.config import load_config, snapshot_config, read_json
 
 
 class TestEpisodeVideo(unittest.TestCase):
@@ -66,15 +66,15 @@ class TestEpisodeVideo(unittest.TestCase):
             from trajectory_msgs.msg import JointTrajectory
             from diagnostic_msgs.msg import DiagnosticArray
             from foxglove_msgs.msg import Grid
-            from xr_marvin_teleop.common.xr_client import XrSnapshot
+            from xr_marvin_teleop.adapters.xr import XrSnapshot
             from xr_marvin_teleop.ros.protocol import (
                 JOINT_NAMES, PICO_TOPICS, joint_state, trajectory, sample_status, status_topic,
                 pico_messages, tactile_grid, stamp_ns, status_values)
             from foxglove_schemas_protobuf.CompressedVideo_pb2 import CompressedVideo
         except ImportError as error:
             self.skipTest(f"integration dependencies unavailable: {error}")
-        from xr_marvin_teleop.common.episode_postprocessor import postprocess_episode
-        from xr_marvin_teleop.common.episode_validator import validate_episode
+        from xr_marvin_teleop.collection.episode_postprocessor import postprocess_episode
+        from xr_marvin_teleop.collection.episode_validator import validate_episode
 
         with tempfile.TemporaryDirectory() as directory:
             episode = Path(directory) / "episode_test"
@@ -156,7 +156,7 @@ class TestEpisodeVideo(unittest.TestCase):
                 "av1_threads": 1,
             })
             # A failed transcode cannot publish partial outputs or delete the originals.
-            with patch("xr_marvin_teleop.common.episode_video.Av1Encoder.encode", side_effect=RuntimeError("disk/codec failure")):
+            with patch("xr_marvin_teleop.collection.episode_video.Av1Encoder.encode", side_effect=RuntimeError("disk/codec failure")):
                 with self.assertRaisesRegex(RuntimeError, "disk/codec failure"):
                     export_episode(episode, options)
             self.assertFalse((episode / "final").exists())
@@ -164,7 +164,7 @@ class TestEpisodeVideo(unittest.TestCase):
             outputs = export_episode(episode, options)
             self.assertEqual(len(outputs), 3)
             for output in outputs:
-                from scripts.data.migrate_sessions import verify
+                from xr_marvin_teleop.cli.migrate import verify
                 self.assertEqual(len(verify(output)["counts"]), 19)
                 variant = output.suffixes[-2]
                 counts, keys = Counter(), {"left": [], "right": []}
@@ -238,8 +238,8 @@ class TestEpisodeVideo(unittest.TestCase):
             # Retain checked exports while exercising independently selected variants.
             (episode / "final").rename(episode / "checked_dual")
             mjpeg_only = video_options(saved={"mjpeg": True, "h264": False, "av1": False})
-            with patch("xr_marvin_teleop.common.episode_video.H264Encoder", side_effect=AssertionError("H264 disabled")), \
-                 patch("xr_marvin_teleop.common.episode_video.Av1Encoder", side_effect=AssertionError("AV1 disabled")):
+            with patch("xr_marvin_teleop.collection.episode_video.H264Encoder", side_effect=AssertionError("H264 disabled")), \
+                 patch("xr_marvin_teleop.collection.episode_video.Av1Encoder", side_effect=AssertionError("AV1 disabled")):
                 self.assertEqual(len(export_episode(episode, mjpeg_only)), 1)
             mjpeg = episode / "final/episode_test.mjpeg.mcap"
             original_hash = hashlib.sha256(mjpeg.read_bytes()).hexdigest()
@@ -247,14 +247,14 @@ class TestEpisodeVideo(unittest.TestCase):
             self.assertEqual(len(export_episode(episode, h264_only, add_missing=True)), 1)
             self.assertTrue((episode / "final/episode_test.h264.mcap").is_file())
             self.assertEqual(hashlib.sha256(mjpeg.read_bytes()).hexdigest(), original_hash)
-            with patch("xr_marvin_teleop.common.episode_video.H264Encoder", side_effect=AssertionError("cached export reencoded")):
+            with patch("xr_marvin_teleop.collection.episode_video.H264Encoder", side_effect=AssertionError("cached export reencoded")):
                 self.assertEqual(len(export_episode(episode, h264_only, add_missing=True)), 1)
             (episode / "final").rename(episode / "checked_mjpeg")
             av1_only = video_options(saved={"mjpeg": False, "h264": False, "av1": True, "av1_threads": 1})
             self.assertEqual(len(export_episode(episode, av1_only)), 1)
             (episode / "final").rename(episode / "checked_h264")
             completed = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/data/postprocess_episode.py"),
+                [sys.executable, "-m", "xr_marvin_teleop.cli.postprocess",
                  str(episode), "--output-root", directory, "--mjpeg", "--no-h264", "--no-av1", "--h264-crf", "28"],
                 capture_output=True, text=True, timeout=30,
             )

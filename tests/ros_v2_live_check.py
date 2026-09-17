@@ -6,9 +6,9 @@ import time
 from contextlib import ExitStack, closing
 from unittest.mock import patch
 
-from xr_marvin_teleop.common.xr_client import XrSnapshot
-from xr_marvin_teleop.common.pico_timing import PicoTimingLog
-from xr_marvin_teleop.hardware.interface.das_finger import DASFingerConfiguration
+from xr_marvin_teleop.adapters.xr import XrSnapshot
+from xr_marvin_teleop.collection.pico_timing import PicoTimingLog
+from xr_marvin_teleop.adapters.das_finger import DASFingerConfiguration
 from xr_marvin_teleop.ros.telemetry_bridge import Ros2DataBridge
 from xr_marvin_teleop.ros.pico_client import RosPicoClient
 from xr_marvin_teleop.ros.das_client import RosDasClient

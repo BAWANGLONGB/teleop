@@ -4,7 +4,6 @@ from copy import deepcopy
 import io
 import json
 from pathlib import Path
-import runpy
 import subprocess
 import sys
 import tempfile
@@ -12,11 +11,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from xr_marvin_teleop.common.collection_config import (
+from xr_marvin_teleop.collection.config import (
     DEFAULT_CONFIG, load_config, validate_config, configure_parser, apply_config,
     snapshot_config, active_devices, check_active_devices,
 )
-from xr_marvin_teleop.common.episode_video import add_video_arguments
+from xr_marvin_teleop.collection.episode_video import add_video_arguments
 
 
 class TestCollectionConfig(unittest.TestCase):
@@ -87,12 +86,12 @@ class TestCollectionConfig(unittest.TestCase):
             invalid_default = load_config()
             invalid_default["capture"]["vision_enabled"] = "false"
             path.write_text(json.dumps(invalid_default))
-            with patch("xr_marvin_teleop.common.collection_config.DEFAULT_CONFIG", path):
+            with patch("xr_marvin_teleop.collection.config.DEFAULT_CONFIG", path):
                 with self.assertRaises(ValueError):
                     validate_config(load_config())
 
     def test_missing_scale_is_generated_before_snapshot(self):
-        from xr_marvin_teleop.common.marvin_scale_calibration import resolve_scale_factor
+        from xr_marvin_teleop.control.calibration import resolve_scale_factor
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -162,8 +161,8 @@ class TestCollectionConfig(unittest.TestCase):
             config.write_text(json.dumps({"export": {"h264_crf": 32}, "preview": {"fps": 12},
                                           "runtime": {"camera_startup_timeout_s": 22.0},
                                           "recording": {"state_cache_bytes": 123456}}))
-            for entry in ("run_collection.py", "record_episode.py"):
-                result = subprocess.run([sys.executable, str(project / "scripts/data" / entry),
+            for module in ("xr_marvin_teleop.cli.collection", "xr_marvin_teleop.cli.record"):
+                result = subprocess.run([sys.executable, "-m", module,
                                          "--config", str(config), "--print-effective-config", "--no-h264"],
                                         capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -171,7 +170,8 @@ class TestCollectionConfig(unittest.TestCase):
                 self.assertFalse(effective["export"]["h264"])
                 self.assertEqual(effective["export"]["h264_crf"], 32)
                 self.assertEqual(effective["preview"]["fps"], 12)
-            namespace = runpy.run_path(str(project / "scripts/data/run_collection.py"))
+            from xr_marvin_teleop.cli import collection as collection_cli
+            namespace = vars(collection_cli)
             (root / "session_test").mkdir()
             args = namespace["parse_command_line_arguments"]([
                 "--config", str(config), "--task", "test", "--enable-hardware",
@@ -191,7 +191,8 @@ class TestCollectionConfig(unittest.TestCase):
 
     def test_recorder_persists_configuration_before_capture(self):
         project = DEFAULT_CONFIG.parent.parent
-        namespace = runpy.run_path(str(project / "scripts/data/record_episode.py"))
+        from xr_marvin_teleop.cli import record as record_cli
+        namespace = vars(record_cli)
         runtime = namespace["main"].__globals__
         runtime["_require_mcap"] = lambda: None
         runtime["EpisodePublisher"] = lambda: SimpleNamespace(

@@ -3,19 +3,18 @@ from contextlib import nullcontext
 import importlib.util
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
-import runpy
 from pathlib import Path
 import tempfile
 import threading
 import unittest
 from unittest.mock import Mock, patch
 
-from xr_marvin_teleop.common.collection_config import write_json
+from xr_marvin_teleop.collection.config import write_json
 
 
 class TestUiExport(unittest.TestCase):
     def test_http_write_origin_and_reset_confirmation(self):
-        spec = importlib.util.spec_from_file_location("secure_ui", Path(__file__).resolve().parents[2] / "UI/server.py")
+        spec = importlib.util.spec_from_file_location("secure_ui", Path(__file__).resolve().parents[1] / "ui/server.py")
         ui = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(ui)
         with patch.object(ui, "process_running", return_value=False), patch.object(ui.subprocess, "run") as run:
@@ -58,8 +57,8 @@ class TestUiExport(unittest.TestCase):
             thread.join()
 
     def test_recording_stop_does_not_package_and_devices_do_not_block_export(self):
-        from xr_marvin_teleop.common.episode_video import activity_lock
-        main = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/data/run_collection.py"))["main"]
+        from xr_marvin_teleop.collection.episode_video import activity_lock
+        from xr_marvin_teleop.cli.collection import main
         runtime = main.__globals__
         for name in ("_preflight", "freeze_arguments", "check_active_devices", "_start_devices", "_finish_starting_devices"):
             runtime[name] = lambda *args, **kwargs: None
@@ -88,7 +87,7 @@ class TestUiExport(unittest.TestCase):
             self.assertEqual(main(argv), 0)
 
     def test_prepare_formats_reuses_files_and_retains_sources_on_failure(self):
-        spec = importlib.util.spec_from_file_location("export_ui", Path(__file__).resolve().parents[2] / "UI/server.py")
+        spec = importlib.util.spec_from_file_location("export_ui", Path(__file__).resolve().parents[1] / "ui/server.py")
         ui = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(ui)
         with tempfile.TemporaryDirectory() as directory:

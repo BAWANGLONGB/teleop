@@ -8,14 +8,14 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from xr_marvin_teleop.common.collection_hotkeys import CollectionHotkeys
-from xr_marvin_teleop.common.collection_config import write_json
-from xr_marvin_teleop.common.episode_video import activity_lock
+from xr_marvin_teleop.collection.hotkeys import CollectionHotkeys
+from xr_marvin_teleop.collection.config import write_json
+from xr_marvin_teleop.collection.episode_video import activity_lock
 
 
 class TestCollectionHotkeys(unittest.TestCase):
     def test_socket_to_backend_without_hardware(self):
-        spec = importlib.util.spec_from_file_location("socket_ui", Path(__file__).resolve().parents[2] / "UI/server.py")
+        spec = importlib.util.spec_from_file_location("socket_ui", Path(__file__).resolve().parents[1] / "ui/server.py")
         ui = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(ui)
         ui.DEVICES = {"hotkey_token": "test", "recording_payload": {"task": "socket"}}
@@ -88,7 +88,7 @@ class TestCollectionHotkeys(unittest.TestCase):
             transport.close.assert_called_once()
 
     def test_backend_toggle_delete_and_guards(self):
-        spec = importlib.util.spec_from_file_location("hotkey_ui", Path(__file__).resolve().parents[2] / "UI/server.py")
+        spec = importlib.util.spec_from_file_location("hotkey_ui", Path(__file__).resolve().parents[1] / "ui/server.py")
         ui = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(ui)
         with tempfile.TemporaryDirectory() as directory, patch("time.monotonic_ns") as clock:

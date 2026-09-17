@@ -266,6 +266,10 @@ def configure_parser(parser):
         if action.dest in ARG_FIELDS:
             action.default = argparse.SUPPRESS
             action.required = False
+            # Suppressed defaults are intentionally absent from argparse's
+            # help-format parameters; do not leave a %(default)s placeholder.
+            if action.help:
+                action.help = action.help.replace(" (default: %(default)s)", "")
         if action.dest == "task":
             action.required = False
 

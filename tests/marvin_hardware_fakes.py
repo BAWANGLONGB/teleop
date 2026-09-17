@@ -13,41 +13,41 @@ from unittest.mock import patch
 
 import numpy as np
 
-from xr_marvin_teleop.common import episode_validator
-from xr_marvin_teleop.common.marvin_scale_calibration import (
+from xr_marvin_teleop.collection import episode_validator
+from xr_marvin_teleop.control.calibration import (
     ArmLengthScaleCalibrator,
     resolve_scale_factor,
     save_scale_calibration,
 )
-from xr_marvin_teleop.common.marvin_postures import MARVIN_INITIAL_POSE_Q_RAD
-from xr_marvin_teleop.common.marvin_session_logger import (
+from xr_marvin_teleop.control.postures import MARVIN_INITIAL_POSE_Q_RAD
+from xr_marvin_teleop.collection.session_logger import (
     MarvinSessionLogger,
     read_marvin_session,
 )
-from xr_marvin_teleop.common.xr_client import XrClient, XrSnapshot
-from xr_marvin_teleop.common.xr_target_mapper import (
+from xr_marvin_teleop.adapters.xr import XrClient, XrSnapshot
+from xr_marvin_teleop.control.mapping import (
     XrTargetMapper,
     transform_controller_poses_to_marvin_frame,
 )
-from xr_marvin_teleop.hardware.interface.marvin import (
+from xr_marvin_teleop.adapters.marvin import (
     MarvinModbusGripperConfiguration,
     MarvinRobotState,
     MarvinSdkAdapter,
     MarvinToolConfiguration,
     _modbus_write_single_register_frame,
 )
-from xr_marvin_teleop.hardware.interface.das_finger import (
+from xr_marvin_teleop.adapters.das_finger import (
     DASFingerAdapter,
     DASFingerConfiguration,
     _decode_encoder_value,
     closedness_to_das_distances,
     load_das_finger_configurations,
 )
-from xr_marvin_teleop.hardware.interface.marvin_kinematics import (
+from xr_marvin_teleop.adapters.marvin_kinematics import (
     MarvinVendorKinematics,
     VendorIkResult,
 )
-from xr_marvin_teleop.hardware.marvin_teleop_controller import (
+from xr_marvin_teleop.control.controller import (
     MarvinHardwareTeleopController,
 )
 from xr_marvin_teleop.ros.das_client import RosDasClient
@@ -322,4 +322,3 @@ class FakeMarvinVendorKinematics:
         q_rad = np.asarray(q_ref_rad).copy()
         q_rad[0] = T_world_tcp_m[0, 3]
         return VendorIkResult(True, q_rad, None)
-

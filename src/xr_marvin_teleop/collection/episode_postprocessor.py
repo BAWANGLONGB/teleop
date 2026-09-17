@@ -237,7 +237,7 @@ def _topic_cursors(input_paths, rosbag2_py, get_message):
             if item.type.startswith("teleop_msgs/"):
                 raise ValueError(
                     "legacy teleop_msgs bag: run "
-                    "scripts/data/migrate_messages_v2.py first"
+                    "uv run teleop-migrate-messages first"
                 )
             previous = topic_metadata.get(item.name)
             if previous is not None and previous.type != item.type:

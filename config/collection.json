@@ -4,7 +4,7 @@
   "paths": {
     "output_root": "../var/dataset",
     "das_config": "das_gripper.example.json",
-    "das_sdk_root": "../../gen_finger_con_python_sdk_release",
+    "das_sdk_root": "../vendor/gen_finger_con_python_sdk_release",
     "scale_calibration": "../var/logs/marvin_scale_calibration.json",
     "calibrations": [],
     "urdf": "../assets/marvin/marvin_dual.urdf"

@@ -7,17 +7,17 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.data.collect_successful_mcaps import collect
-from xr_marvin_teleop.common.collection_config import write_json
-from xr_marvin_teleop.common.episode_review import (
+from xr_marvin_teleop.cli.collect_successful import collect
+from xr_marvin_teleop.collection.config import write_json
+from xr_marvin_teleop.collection.episode_review import (
     annotation_lock, episode_path, read_review, save_review, save_session, session_path,
 )
-from xr_marvin_teleop.common.episode_video import activity_lock
+from xr_marvin_teleop.collection.episode_video import activity_lock
 
 
 class TestEpisodeReview(unittest.TestCase):
     def test_ui_session_and_review_api(self):
-        location = Path(__file__).resolve().parents[2] / "UI/server.py"
+        location = Path(__file__).resolve().parents[1] / "ui/server.py"
         spec = importlib.util.spec_from_file_location("review_ui_server", location)
         ui = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(ui)
@@ -118,7 +118,7 @@ class TestEpisodeReview(unittest.TestCase):
                 collect(root, output)
             self.assertFalse(output.exists())
             missing.write_bytes(original)
-            with patch("scripts.data.collect_successful_mcaps.write_json", side_effect=OSError("disk full")):
+            with patch("xr_marvin_teleop.cli.collect_successful.write_json", side_effect=OSError("disk full")):
                 with self.assertRaises(OSError):
                     collect(root, output)
             self.assertFalse(output.exists())

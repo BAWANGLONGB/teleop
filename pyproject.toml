@@ -1,5 +1,5 @@
 [build-system]
-  requires = ["setuptools>=68"]
+  requires = ["setuptools>=68", "pybind11"]
   build-backend = "setuptools.build_meta"
 
   [project]
@@ -13,10 +13,32 @@
     "foxglove-schemas-protobuf>=0.3",
   ]
 
-  [project.optional-dependencies]
+[project.optional-dependencies]
   video = ["av>=12"]
   lerobot = ["pyarrow>=14"]
+  das = [
+      "numpy>=1.19.0",
+      "opencv-python>=4.5.0",
+      "pyarmor>=8.0.0",
+      "pyserial>=3.5",
+  ]
 
-  [tool.setuptools.packages.find]
+[tool.setuptools.packages.find]
   where = ["src"]
-
+[project.scripts]
+  teleop-collect = "xr_marvin_teleop.cli.collection:main"
+  teleop-record = "xr_marvin_teleop.cli.record:main"
+  teleop-postprocess = "xr_marvin_teleop.cli.postprocess:main"
+  teleop-review = "xr_marvin_teleop.cli.review:main"
+  teleop-capture = "xr_marvin_teleop.cli.capture:main"
+  teleop-das = "xr_marvin_teleop.cli.das:main"
+  teleop-migrate = "xr_marvin_teleop.cli.migrate:main"
+  teleop-migrate-messages = "xr_marvin_teleop.cli.migrate_messages:main"
+  teleop-collect-successful = "xr_marvin_teleop.cli.collect_successful:main"
+  teleop-extract = "xr_marvin_teleop.cli.extract:main"
+  teleop-validate = "xr_marvin_teleop.cli.validate:main"
+  teleop-pico = "xr_marvin_teleop.cli.pico:main"
+  teleop-calibrate-das = "xr_marvin_teleop.cli.calibrate_das:main"
+  teleop-hardware = "xr_marvin_teleop.cli.hardware:main"
+  teleop-reset = "xr_marvin_teleop.cli.reset:main"
+  teleop-web = "xr_marvin_teleop.web.server:main"

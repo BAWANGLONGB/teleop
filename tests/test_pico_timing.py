@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from xr_marvin_teleop.common.pico_timing import PicoTimingLog
-from xr_marvin_teleop.common.xr_client import XrClient
+from xr_marvin_teleop.collection.pico_timing import PicoTimingLog
+from xr_marvin_teleop.adapters.xr import XrClient
 
 
 class TestPicoTiming(unittest.TestCase):
@@ -84,7 +84,7 @@ class TestPicoTiming(unittest.TestCase):
             from geometry_msgs.msg import PoseArray
         except ImportError as error:
             self.skipTest(str(error))
-        from xr_marvin_teleop.common.xr_client import XrSnapshot
+        from xr_marvin_teleop.adapters.xr import XrSnapshot
         from xr_marvin_teleop.ros.pico_client import RosPicoClient
         client = RosPicoClient.__new__(RosPicoClient)
         client._timing = Mock()

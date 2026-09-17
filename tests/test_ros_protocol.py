@@ -27,9 +27,9 @@ from xr_marvin_teleop.ros.protocol import (
     tactile_grid,
     trajectory,
 )
-from xr_marvin_teleop.common.xr_client import XrSnapshot
-from xr_marvin_teleop.common.episode_postprocessor import _matrix_quaternion, rpy_matrix
-from xr_marvin_teleop.common.xr_target_mapper import rotation_matrix_from_openxr_pose
+from xr_marvin_teleop.adapters.xr import XrSnapshot
+from xr_marvin_teleop.collection.episode_postprocessor import _matrix_quaternion, rpy_matrix
+from xr_marvin_teleop.control.mapping import rotation_matrix_from_openxr_pose
 
 
 class TestTopicContract(unittest.TestCase):
@@ -85,7 +85,7 @@ class TestProtocol(unittest.TestCase):
         self.assertEqual((grid.column_count, grid.row_stride, grid.cell_stride), (224, 224, 1))
         with self.assertRaises(ValueError):
             tactile_grid(raw[:-1], "left", time.time_ns())
-        from xr_marvin_teleop.hardware.interface.das_finger import DASFingerConfiguration
+        from xr_marvin_teleop.adapters.das_finger import DASFingerConfiguration
         configs = (DASFingerConfiguration("/dev/l", "/dev/cl", .01, .07),) * 2
         np.testing.assert_allclose(gripper_targets(trajectory([0., 1.], GRIPPER_NAMES, time.time_ns()), configs), (.01, .07), rtol=0, atol=1e-14)
         with self.assertRaisesRegex(ValueError, "openness"):
@@ -134,7 +134,7 @@ class TestProtocol(unittest.TestCase):
     def test_validator_reports_missing_metadata_and_source_gaps(self):
         import rosbag2_py
         from rclpy.serialization import serialize_message
-        from xr_marvin_teleop.common.episode_validator import inspect_bag
+        from xr_marvin_teleop.collection.episode_validator import inspect_bag
         topic = "/raw/marvin/joint_state"
         with tempfile.TemporaryDirectory() as directory:
             path = directory + "/state"

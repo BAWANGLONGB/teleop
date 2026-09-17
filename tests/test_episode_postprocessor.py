@@ -10,21 +10,21 @@ from unittest.mock import patch
 
 import numpy as np
 
-from xr_marvin_teleop.common.episode_postprocessor import (
+from xr_marvin_teleop.collection.episode_postprocessor import (
     UrdfForwardKinematics,
     matrix_rpy,
     rpy_matrix,
     _topic_time_ns,
 )
-from xr_marvin_teleop.common.episode_package import (
+from xr_marvin_teleop.collection.episode_package import (
     attachment_entries,
     extract_episode_mcap,
     read_attachment,
     validate_episode_mcap,
     write_episode_mcap,
 )
-from xr_marvin_teleop.common import episode_validator
-from xr_marvin_teleop.hardware.interface.das_finger import (
+from xr_marvin_teleop.collection import episode_validator
+from xr_marvin_teleop.adapters.das_finger import (
     DASFingerConfiguration,
 )
 
