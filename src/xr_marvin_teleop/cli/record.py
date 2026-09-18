@@ -147,8 +147,9 @@ def _camera_command(
     preview_fps=None,
 ):
     command = [
-        "/usr/bin/python3",
-        str(project_root / "scripts" / "data" / "capture_das_mjpeg.py"),
+        str(project_root / ".venv" / "bin" / "python"),
+        "-m",
+        "xr_marvin_teleop.cli.capture",
         "--side",
         side,
         "--device",

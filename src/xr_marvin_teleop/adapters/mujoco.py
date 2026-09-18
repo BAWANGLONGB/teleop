@@ -64,6 +64,7 @@ class MarvinMujocoAdapter:
         self._is_connected = False
         self._is_released = False
         self._arm_state = (0, 0)
+        self._impedance_type = (0, 0)
         self._frame_serial = 0
         self._gripper_closedness = np.zeros(2)
 
@@ -102,6 +103,7 @@ class MarvinMujocoAdapter:
             q_rad=q_rad,
             dq_rad_s=dq_rad_s,
             arm_state=self._arm_state,
+            impedance_type=self._impedance_type,
             error_code=(0, 0),
             low_speed=tuple(
                 bool(np.max(np.abs(dq_rad_s[index * 7:(index + 1) * 7])) < 1e-3)
@@ -117,6 +119,7 @@ class MarvinMujocoAdapter:
 
     def enter_joint_impedance(self):
         self._arm_state = (3, 3)
+        self._impedance_type = (1, 1)
 
     def enable_pd_feedforward(self, _period_milliseconds):
         return None
@@ -169,6 +172,7 @@ class MarvinMujocoAdapter:
 
     def set_idle(self):
         self._arm_state = (0, 0)
+        self._impedance_type = (0, 0)
         return True
 
     def is_running(self):

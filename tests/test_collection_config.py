@@ -179,6 +179,7 @@ class TestCollectionConfig(unittest.TestCase):
                 "--joint-command-max-speed-deg-s", "80",
                 "--confirmed-estop", "--confirmed-joint-mapping"])
             commands = namespace["_build_commands"](args)
+            self.assertEqual(Path(commands["pico"][0]), project / ".venv/bin/python")
             hardware = commands["hardware"]
             self.assertEqual(hardware[hardware.index("--joint-command-max-speed-deg-s") + 1], "80.0")
             recorder = commands["recorder"]
@@ -188,6 +189,15 @@ class TestCollectionConfig(unittest.TestCase):
             self.assertEqual(recorder[recorder.index("--episode-id") + 1], "episode_120000_deadbeef")
             self.assertIn("--encoder-stale-timeout", commands["das_left"])
             self.assertEqual(commands["hardware"][commands["hardware"].index("--gripper-mode") + 1], "binary")
+
+            from xr_marvin_teleop.cli import record as record_cli
+            camera = record_cli._camera_command(
+                project, "left",
+                SimpleNamespace(camera_device="/dev/video0", camera_resolution="640x480", camera_fps=60),
+                root / "camera", root / "storage.yaml", root / "ready",
+            )
+            self.assertEqual(Path(camera[0]), project / ".venv/bin/python")
+            self.assertEqual(camera[1:3], ["-m", "xr_marvin_teleop.cli.capture"])
 
     def test_recorder_persists_configuration_before_capture(self):
         project = DEFAULT_CONFIG.parent.parent

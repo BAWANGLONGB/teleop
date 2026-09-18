@@ -39,6 +39,7 @@ class TestMarvinInterfaces(unittest.TestCase):
         adapter.connect()
         robot_feedback = adapter.read_state()
         np.testing.assert_allclose(robot_feedback.q_rad, 0.0)
+        self.assertEqual(robot_feedback.impedance_type, (0, 0))
 
         q_deg = np.arange(14, dtype=float)
         tools = (
@@ -61,6 +62,15 @@ class TestMarvinInterfaces(unittest.TestCase):
         self.assertEqual(fake_marvin_robot.tools["A"][1], [1.0] + [0.0] * 9)
         self.assertEqual(fake_marvin_robot.tools["B"][1], [2.0] + [0.0] * 9)
         self.assertEqual(fake_marvin_robot.wait_response_calls, 0)
+        adapter.enter_joint_impedance()
+        self.assertEqual(fake_marvin_robot.wait_response_calls, 0)
+        self.assertEqual(adapter.read_state().impedance_type, (1, 1))
+        adapter.enable_pd_feedforward(20)
+        self.assertEqual(fake_marvin_robot.wait_response_calls, 0)
+        self.assertEqual(
+            fake_marvin_robot.pd_velocity_estimation_steps,
+            {"A": 20, "B": 20},
+        )
         adapter.send_joint_command(np.deg2rad(q_deg))
         np.testing.assert_allclose(
             fake_marvin_robot.q_commands_deg["A"], q_deg[:7]

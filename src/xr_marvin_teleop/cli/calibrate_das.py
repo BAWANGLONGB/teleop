@@ -53,7 +53,6 @@ def main():
         baudrate=921600,
         encoder_freq=30,
         encoder_callback=encoder_callback,
-        initial_distance_m=configuration.startup_distance_m,
     )
     try:
         calibration_requested.set()

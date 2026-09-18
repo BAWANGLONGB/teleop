@@ -40,10 +40,10 @@ from xr_marvin_teleop.ros.pico_client import RosPicoClient
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_SDK_ROOT = PROJECT_ROOT.parent / "TJArm" / "tj_fx_robot-master"
-DEFAULT_TOOLS_CONFIG = PROJECT_ROOT.parent / "TJArm" / "tools_cfg.json"
-DEFAULT_SCALE_CALIBRATION = PROJECT_ROOT / "logs" / "marvin_scale_calibration.json"
-DEFAULT_LOG_DIRECTORY = PROJECT_ROOT / "logs"
+DEFAULT_SDK_ROOT = PROJECT_ROOT / "vendor" / "marvin" / "tj_fx_robot-master"
+DEFAULT_TOOLS_CONFIG = DEFAULT_SDK_ROOT / "tools_cfg.json"
+DEFAULT_SCALE_CALIBRATION = PROJECT_ROOT / "var" / "logs" / "marvin_scale_calibration.json"
+DEFAULT_LOG_DIRECTORY = PROJECT_ROOT / "var" / "logs"
 
 
 def parse_command_line_arguments(arguments=None):

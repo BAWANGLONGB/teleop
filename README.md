@@ -16,7 +16,7 @@
 
   验收：
 
-  python -m unittest \
+  .venv/bin/python -m unittest \
     tests.test_marvin_controller \
     tests.test_marvin_simulation -v
 
@@ -35,7 +35,7 @@
 
   验收：
 
-  python -m unittest \
+  .venv/bin/python -m unittest \
     tests.test_marvin_interfaces \
     tests.test_marvin_entrypoints -v
 
@@ -54,7 +54,7 @@
 
   验收：
 
-  python -m unittest \
+  .venv/bin/python -m unittest \
     tests.test_marvin_ros_data \
     tests.test_collection_config \
     tests.test_episode_postprocessor \
@@ -73,6 +73,5 @@
 
   验收：
 
-  python -m xr_marvin_teleop.web.server --self-test
+  .venv/bin/python -m xr_marvin_teleop.web.server --self-test
   node ui/test.mjs
-

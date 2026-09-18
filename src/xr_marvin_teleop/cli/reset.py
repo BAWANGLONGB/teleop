@@ -26,8 +26,8 @@ from xr_marvin_teleop.control.controller import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_SDK_ROOT = PROJECT_ROOT.parent / "TJArm" / "tj_fx_robot-master"
-DEFAULT_TOOLS_CONFIG = PROJECT_ROOT.parent / "TJArm" / "tools_cfg.json"
+DEFAULT_SDK_ROOT = PROJECT_ROOT / "vendor" / "marvin" / "tj_fx_robot-master"
+DEFAULT_TOOLS_CONFIG = DEFAULT_SDK_ROOT / "tools_cfg.json"
 CONFLICTING_PROGRAMS = (
     "run_collection.py",
     "record_episode.py",
@@ -140,11 +140,17 @@ def reset_robot(
             joint_velocity_ratio=DEFAULT_JOINT_VELOCITY_RATIO,
             joint_acceleration_ratio=DEFAULT_JOINT_ACCELERATION_RATIO,
         )
-        sleep(0.2)
+        sleep(0.5)
         adapter.enter_joint_impedance()
         sleep(1.0)
         feedback = adapter.wait_for_fresh_feedback(required_updates=1)
         MarvinHardwareTeleopController._require_healthy_feedback(feedback, True)
+        print(
+            "Marvin joint impedance mode: "
+            f"cur_state={feedback.arm_state}, "
+            f"imp_type={feedback.impedance_type}",
+            flush=True,
+        )
         adapter.enable_pd_feedforward(round(1000.0 / control_hz))
         sleep(1.0)
         feedback = adapter.wait_for_fresh_feedback(required_updates=1)

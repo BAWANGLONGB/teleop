@@ -130,19 +130,17 @@ IDLE → STARTING_DEVICES → DEVICES_READY → RECORDING → FINALIZING → DEV
 ## 运行
 
 ```bash
-source /home/zxcx/TeleOp/.miniconda-xr/etc/profile.d/conda.sh
-conda activate Teleop
-source /home/zxcx/TeleOp/xr-marvin-teleop/ros2_ws/install/setup.bash
+source /opt/ros/humble/setup.bash
 unset LD_PRELOAD
-cd /home/zxcx/yubing/teleop/ui
-python server.py
+cd /home/zxcx/yubing/teleop
+.venv/bin/teleop-web
 ```
 
-浏览器访问 `http://localhost:4173`。`server.py` 只监听本机，负责静态页面、数据集读取与回收站删除、PICO 探测/重连、相机能力查询，以及现有 `run_collection.py` 的启停。按 `Ctrl+C` 退出服务时，活动采集会先收到安全停止信号。
+浏览器访问 `http://localhost:4173`。`teleop-web` 只监听本机，负责静态页面、数据集读取与回收站删除、PICO 探测/重连、相机能力查询，以及采集进程的启停。按 `Ctrl+C` 退出服务时，活动采集会先收到安全停止信号。
 
 最小自检不会连接或删除真实硬件数据：
 
 ```bash
-python server.py --self-test
+.venv/bin/teleop-web --self-test
 node test.mjs
 ```

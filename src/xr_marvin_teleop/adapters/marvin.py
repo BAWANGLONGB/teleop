@@ -139,6 +139,7 @@ class MarvinRobotState:
     q_rad: np.ndarray
     dq_rad_s: np.ndarray
     arm_state: tuple[int, int]
+    impedance_type: tuple[int, int]
     error_code: tuple[int, int]
     low_speed: tuple[bool, bool]
 
@@ -146,6 +147,7 @@ class MarvinRobotState:
         for field_name in (
             "frame_serial",
             "arm_state",
+            "impedance_type",
             "error_code",
             "low_speed",
         ):
@@ -309,6 +311,12 @@ class MarvinSdkAdapter:
                     raw_feedback, "states", "cur_state"
                 )
             ),
+            impedance_type=tuple(
+                int(value)
+                for value in self._read_arm_values(
+                    raw_feedback, "inputs", "imp_type"
+                )
+            ),
             error_code=tuple(
                 int(value)
                 for value in self._read_arm_values(
@@ -364,7 +372,7 @@ class MarvinSdkAdapter:
             if not setter():
                 raise RuntimeError(f"Marvin setter failed: {setter_description}")
         if wait_for_response:
-            response = self._marvin_robot.send_cmd_wait_response(100)
+            response = self._marvin_robot.send_cmd_wait_response(1000)
             if response is None or response == 0:
                 raise TimeoutError(f"Marvin {transaction_name} response timed out")
             if response < 0:
@@ -586,7 +594,7 @@ class MarvinSdkAdapter:
                     lambda: self._marvin_robot.set_impedance_type(arm="B", type=1),
                 ),
             ),
-            True,
+            False,
             "joint impedance mode switch",
         )
 
@@ -606,7 +614,7 @@ class MarvinSdkAdapter:
                 )
                 for sdk_arm_name in ("A", "B")
             ),
-            True,
+            False,
             "PD feedforward configuration",
         )
 

@@ -54,7 +54,7 @@ class MarvinHardwareTeleopController:
         return_duration=3.0,
         grip_activation_threshold=0.9,
         expected_sdk_version=None,
-        control_parameter_settle_seconds=0.2,
+        control_parameter_settle_seconds=0.5,
         mode_settle_seconds=1.0,
         pd_settle_seconds=1.0,
         session_logger=None,
@@ -290,10 +290,14 @@ class MarvinHardwareTeleopController:
             raise RuntimeError(
                 f"Marvin reported error states {robot_feedback.arm_state}"
             )
-        if require_impedance_mode and robot_feedback.arm_state != (3, 3):
+        if require_impedance_mode and (
+            robot_feedback.arm_state != (3, 3)
+            or robot_feedback.impedance_type != (1, 1)
+        ):
             raise RuntimeError(
                 "Marvin did not enter dual-arm joint impedance mode: "
-                f"{robot_feedback.arm_state}"
+                f"cur_state={robot_feedback.arm_state}, "
+                f"imp_type={robot_feedback.impedance_type}"
             )
 
     def _require_advancing_feedback(self, robot_feedback):
@@ -412,6 +416,12 @@ class MarvinHardwareTeleopController:
             required_updates=1,
         )
         self._require_healthy_feedback(robot_feedback, True)
+        print(
+            "Marvin joint impedance mode: "
+            f"cur_state={robot_feedback.arm_state}, "
+            f"imp_type={robot_feedback.impedance_type}",
+            flush=True,
+        )
         self.adapter.enable_pd_feedforward(self.pd_period_milliseconds)
         if self.pd_settle_seconds > 0.0:
             time.sleep(self.pd_settle_seconds)
@@ -420,7 +430,7 @@ class MarvinHardwareTeleopController:
             required_updates=1,
         )
         self._require_healthy_feedback(robot_feedback, True)
-        self._send_joint_command(startup_q_rad, wait_response=True)
+        self._send_joint_command(startup_q_rad, wait_response=False)
         self._last_feedback_frame_serial = robot_feedback.frame_serial
         self._stale_feedback_cycle_counts = [0, 0]
         self._previous_button_a = startup_xr_snapshot.button_a

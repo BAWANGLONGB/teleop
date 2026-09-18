@@ -29,6 +29,22 @@ from tests.marvin_hardware_fakes import (
 
 
 class TestMarvinController(unittest.TestCase):
+    def test_impedance_mode_requires_joint_impedance_feedback(self):
+        feedback = MarvinRobotState(
+            frame_serial=(1, 1),
+            q_rad=np.zeros(14),
+            dq_rad_s=np.zeros(14),
+            arm_state=(3, 3),
+            impedance_type=(1, 2),
+            error_code=(0, 0),
+            low_speed=(True, True),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "imp_type=\\(1, 2\\)"):
+            MarvinHardwareTeleopController._require_healthy_feedback(
+                feedback, True
+            )
+
     def test_joint_command_interpolation_and_hold_transitions(self):
         released = XrSnapshot(1, make_openxr_pose(), make_openxr_pose(),
                               (0.0, 0.0), False, False)
@@ -612,6 +628,7 @@ class TestMarvinController(unittest.TestCase):
                 ],
             )
             self.assertEqual(adapter.pd_period_milliseconds, 20)
+            self.assertEqual(adapter.joint_command_wait_responses, [False])
             startup_hold_q_rad = controller.execute_control_cycle(0.0)
             np.testing.assert_allclose(startup_hold_q_rad, 0.0)
             controller.execute_control_cycle(0.1)
@@ -810,6 +827,7 @@ class TestMarvinController(unittest.TestCase):
             q_rad=adapter.q_rad,
             dq_rad_s=np.zeros(14),
             arm_state=adapter.arm_state,
+            impedance_type=adapter.impedance_type,
             error_code=(0, 0),
             low_speed=(True, True),
         )

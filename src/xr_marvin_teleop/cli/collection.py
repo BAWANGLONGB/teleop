@@ -32,6 +32,7 @@ from xr_marvin_teleop.collection.config import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_PYTHON = PROJECT_ROOT / ".venv" / "bin" / "python"
 PROCESS_CPUS = {name: tuple(cpus) for name, cpus in read_json(DEFAULT_CONFIG)["runtime"]["cpus"].items()}
 
 
@@ -129,6 +130,8 @@ def parse_command_line_arguments(arguments=None):
 
 
 def _preflight(arguments):
+    if not PROJECT_PYTHON.is_file():
+        raise FileNotFoundError(f"project Python is missing: {PROJECT_PYTHON}")
     if "/usr/lib/x86_64-linux-gnu/libstdc++.so.6" in os.environ.get(
         "LD_PRELOAD", ""
     ).split(":"):
@@ -320,7 +323,7 @@ def _build_das_commands(arguments, python):
 
 
 def _build_commands(arguments):
-    python = sys.executable
+    python = str(PROJECT_PYTHON)
     pico = [
         python,
         "-m", "xr_marvin_teleop.cli.pico",

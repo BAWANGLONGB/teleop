@@ -854,7 +854,7 @@ def _start_collection(payload, part):
         except OSError as error:
             print_status_error("相机预览", str(error))
     command = [
-        str(TELEOP_PYTHON if TELEOP_PYTHON.is_file() else Path(sys.executable)), "-m", COLLECTION_MODULE,
+        str(TELEOP_PYTHON), "-m", COLLECTION_MODULE,
         "--part", part,
         "--config", str(COLLECTION_CONFIG_PATH), "--output-root", str(DATASET_ROOT),
         "--task", task, "--operator", operator, "--robot-model", robot,
@@ -1240,13 +1240,13 @@ def self_test():
     assert not print_status_error("self-test", "same")
     assert not print_status_error("self-test", None) and "self-test" not in LAST_STATUS_ERRORS
     probe_name = "fieldnote_process_probe.py"
-    decoy = subprocess.Popen((sys.executable, "-c", "import time; time.sleep(5)", f"prefix-{probe_name}"))
+    decoy = subprocess.Popen((str(TELEOP_PYTHON), "-c", "import time; time.sleep(5)", f"prefix-{probe_name}"))
     try:
         assert not process_running(probe_name)
     finally:
         decoy.terminate()
         decoy.wait()
-    probe = subprocess.Popen((sys.executable, "-c", "import time; time.sleep(5)", probe_name))
+    probe = subprocess.Popen((str(TELEOP_PYTHON), "-c", "import time; time.sleep(5)", probe_name))
     try:
         assert process_running(probe_name)
     finally:

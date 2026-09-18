@@ -153,7 +153,6 @@ class DasSidePublisher:
                 tactile_freq=self.configuration.tactile_hz,
                 encoder_callback=self._handle_encoder,
                 tactile_callback=self._handle_tactile,
-                initial_distance_m=self.configuration.startup_distance_m,
             )
             if self._encoder_ready.is_set():
                 self._bus.set_target_distance(self._target_m)

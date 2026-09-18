@@ -27,10 +27,10 @@ from xr_marvin_teleop.simulation.marvin_mujoco_adapter import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_SDK_ROOT = PROJECT_ROOT.parent / "TJArm" / "tj_fx_robot-master"
-DEFAULT_TOOLS_CONFIGURATION = PROJECT_ROOT.parent / "TJArm" / "tools_cfg.json"
+DEFAULT_SDK_ROOT = PROJECT_ROOT / "vendor" / "marvin" / "tj_fx_robot-master"
+DEFAULT_TOOLS_CONFIGURATION = DEFAULT_SDK_ROOT / "tools_cfg.json"
 DEFAULT_XML_PATH = PROJECT_ROOT / "assets" / "marvin" / "marvin_dual.mujoco.xml"
-DEFAULT_SCALE_CALIBRATION = PROJECT_ROOT / "logs" / "marvin_scale_calibration.json"
+DEFAULT_SCALE_CALIBRATION = PROJECT_ROOT / "var" / "logs" / "marvin_scale_calibration.json"
 
 
 def parse_command_line_arguments():
@@ -101,7 +101,7 @@ def parse_command_line_arguments():
         "--nsp-lateral-sign-right", type=int, choices=(-1, 1), default=1
     )
     parser.add_argument(
-        "--log-directory", type=Path, default=PROJECT_ROOT / "logs"
+        "--log-directory", type=Path, default=PROJECT_ROOT / "var" / "logs"
     )
     parser.add_argument("--headless", action="store_true")
     return parser.parse_args()

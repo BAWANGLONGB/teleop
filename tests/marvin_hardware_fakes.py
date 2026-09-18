@@ -95,6 +95,8 @@ class FakeMarvinRobot:
         self.invalid_feedback_reads = 0
         self.q_commands_deg = {}
         self.joint_impedance = {}
+        self.impedance_types = {"A": 0, "B": 0}
+        self.pd_velocity_estimation_steps = {}
         self.joint_motion_limits = {}
         self.tools = {}
         self.wait_response_calls = 0
@@ -130,6 +132,10 @@ class FakeMarvinRobot:
             "states": [
                 {"cur_state": 3, "err_code": 0},
                 {"cur_state": 3, "err_code": 0},
+            ],
+            "inputs": [
+                {"imp_type": self.impedance_types["A"]},
+                {"imp_type": self.impedance_types["B"]},
             ],
         }
 
@@ -168,6 +174,14 @@ class FakeMarvinRobot:
         return size_int
 
     def set_state(self, arm, state):
+        return True
+
+    def set_impedance_type(self, arm, type):
+        self.impedance_types[arm] = type
+        return True
+
+    def set_PD_vel_est_step(self, arm, step):
+        self.pd_velocity_estimation_steps[arm] = step
         return True
 
     def release_robot(self):
@@ -211,8 +225,10 @@ class FakeMarvinSdkAdapter:
     def __init__(self):
         self.q_rad = np.zeros(14)
         self.arm_state = (0, 0)
+        self.impedance_type = (0, 0)
         self.frame_serial = 0
         self.sent_commands_rad = []
+        self.joint_command_wait_responses = []
         self.events = []
         self.configured_parameters = None
         self.configured_named_parameters = None
@@ -234,6 +250,7 @@ class FakeMarvinSdkAdapter:
             q_rad=self.q_rad,
             dq_rad_s=np.zeros(14),
             arm_state=self.arm_state,
+            impedance_type=self.impedance_type,
             error_code=(0, 0),
             low_speed=(True, True),
         )
@@ -245,8 +262,8 @@ class FakeMarvinSdkAdapter:
         return self._feedback()
 
     def send_joint_command(self, q_rad, wait_response=False):
-        del wait_response
         self.events.append("send_joint_command")
+        self.joint_command_wait_responses.append(wait_response)
         self.q_rad = np.asarray(q_rad).copy()
         self.sent_commands_rad.append(self.q_rad.copy())
 
@@ -261,6 +278,7 @@ class FakeMarvinSdkAdapter:
     def enter_joint_impedance(self):
         self.events.append("enter_joint_impedance")
         self.arm_state = (3, 3)
+        self.impedance_type = (1, 1)
 
     def enable_pd_feedforward(self, _period_milliseconds):
         self.events.append("enable_pd_feedforward")
@@ -269,6 +287,7 @@ class FakeMarvinSdkAdapter:
     def set_idle(self):
         self.idle = True
         self.arm_state = (0, 0)
+        self.impedance_type = (0, 0)
         return True
 
     def release(self):
