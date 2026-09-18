@@ -39,13 +39,12 @@ from xr_marvin_teleop.collection.episode_video import VIDEO_VARIANTS, activity_l
 COLLECTION_CONFIG_PATH = DEFAULT_CONFIG
 COLLECTION_SETTINGS = validate_config(load_config())
 
-CONDA_SETUP = WORKSPACE / ".miniconda-xr" / "etc" / "profile.d" / "conda.sh"
 ROS_BASE_SETUP = Path("/opt/ros/humble/setup.bash")
 DATASET_ROOT = Path(COLLECTION_SETTINGS["paths"]["output_root"])
 COLLECTION_MODULE = "xr_marvin_teleop.cli.collection"
 RESET_MODULE = "xr_marvin_teleop.cli.reset"
 POSTPROCESS_MODULE = "xr_marvin_teleop.cli.postprocess"
-TELEOP_PYTHON = WORKSPACE / ".miniconda-xr" / "envs" / "Teleop" / "bin" / "python"
+TELEOP_PYTHON = WORKSPACE / ".venv" / "bin" / "python"
 ROBOTICS_SERVICE_SCRIPT = Path("/opt/apps/roboticsservice/runService.sh")
 ROBOTICS_SERVICE_PORTS = (63901, 60061)
 MARVIN_IP = COLLECTION_SETTINGS["robot"]["ip"]
@@ -90,15 +89,15 @@ def print_status_error(source, message):
 @lru_cache(maxsize=1)
 def teleop_environment():
     environment = os.environ.copy()
-    missing = [str(path) for path in (CONDA_SETUP, ROS_BASE_SETUP, TELEOP_PYTHON) if not path.is_file()]
+    missing = [str(path) for path in (ROS_BASE_SETUP, TELEOP_PYTHON) if not path.is_file()]
     if missing:
         raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, f"遥操环境文件缺失：{', '.join(missing)}")
     try:
         result = subprocess.run(
             (
                 "bash", "-c",
-                'source "$1" && conda activate Teleop && source "$2" && unset LD_PRELOAD && env -0',
-                "fieldnote", str(CONDA_SETUP), str(ROS_BASE_SETUP),
+                'source "$1" && unset LD_PRELOAD && env -0',
+                "fieldnote", str(ROS_BASE_SETUP),
             ),
             capture_output=True, timeout=5, check=False,
         )
