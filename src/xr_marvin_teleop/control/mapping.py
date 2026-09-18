@@ -3,7 +3,9 @@ import numpy as np
 
 # OpenXR right/up/forward (+X/+Y/-Z) -> Marvin +Y/+Z/-X.
 OPENXR_TO_MARVIN_ROTATION = np.array(
-    [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    [[0.0, 0.0, 1.0], 
+     [1.0, 0.0, 0.0], 
+     [0.0, 1.0, 0.0]]
 )
 
 

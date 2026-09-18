@@ -1,5 +1,6 @@
 """On-demand exports: selected format, reuse, and recording exclusion."""
 from contextlib import nullcontext
+from datetime import datetime
 import importlib.util
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
@@ -13,6 +14,66 @@ from xr_marvin_teleop.collection.config import write_json
 
 
 class TestUiExport(unittest.TestCase):
+    def test_successful_recording_auto_exports_h264_to_daily_collection(self):
+        from xr_marvin_teleop.web import server as ui
+
+        class ImmediateThread:
+            def __init__(self, target, args=(), **_kwargs):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ui.DATASET_ROOT = root / "dataset"
+            ui.COLLECTION_EXPORT_ROOT = root / "collection"
+            episode = ui.DATASET_ROOT / "session_2026-09-18/episode_120000_deadbeef"
+            episode.mkdir(parents=True)
+            write_json(episode / "metadata.json", {"status": "completed"})
+            process = Mock()
+            process.wait.return_value = 0
+            process.poll.return_value = 0
+            started_at = datetime(2026, 9, 18, 12).timestamp()
+            job = {
+                "process": process, "episode_id": episode.name, "episode_path": str(episode),
+                "session": episode.parent.name, "task": "test", "status": "stopping",
+                "started_at": started_at, "log": root / "recording.log",
+                "ready_file": root / "ready", "max_duration": None,
+            }
+            ui.COLLECTION = job
+
+            def pack(command, **_kwargs):
+                self.assertIn("--h264", command)
+                self.assertIn("--no-av1", command)
+                self.assertIn("--no-mjpeg", command)
+                final = episode / "final"
+                final.mkdir()
+                (final / f"{episode.name}.h264.mcap").write_bytes(b"h264")
+                return Mock(returncode=0)
+
+            with patch.object(ui, "teleop_environment", return_value={}), \
+                 patch.object(ui.subprocess, "run", side_effect=pack) as run, \
+                 patch.object(ui.threading, "Thread", ImmediateThread):
+                ui._watch_job("recording", process, root / "config.json", root / "ready")
+
+            exported = ui.COLLECTION_EXPORT_ROOT / "2026-09-18" / f"{episode.name}.h264.mcap"
+            self.assertEqual(exported.read_bytes(), b"h264")
+            self.assertTrue(exported.samefile(episode / "final" / exported.name))
+            self.assertEqual(job["export_status"], "completed")
+            self.assertEqual(job["export_path"], str(exported))
+            self.assertFalse(ui.EXPORT_LOCK.locked())
+            run.assert_called_once()
+
+            failed = Mock()
+            failed.wait.return_value = 1
+            failed_job = {**job, "process": failed, "status": "stopping"}
+            ui.COLLECTION = failed_job
+            with patch.object(ui, "_start_automatic_h264_export") as start:
+                ui._watch_job("recording", failed, root / "missing-config", root / "missing-ready")
+                start.assert_not_called()
+            self.assertEqual(failed_job["status"], "failed")
+
     def test_http_write_origin_and_reset_confirmation(self):
         spec = importlib.util.spec_from_file_location("secure_ui", Path(__file__).resolve().parents[1] / "ui/server.py")
         ui = importlib.util.module_from_spec(spec)

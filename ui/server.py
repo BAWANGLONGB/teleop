@@ -26,6 +26,7 @@ UI_ROOT = Path(__file__).resolve().parent
 WORKSPACE = UI_ROOT.parent
 PROJECT_ROOT = WORKSPACE
 SOURCE_ROOT = PROJECT_ROOT / "src"
+LOG_ROOT = PROJECT_ROOT / "var" / "logs"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
@@ -196,7 +197,6 @@ def mcap_export_files(dataset_root, episode_ids, variant="av1"):
     if not path.is_file():
         raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, f"{episode_id} 尚无 {variant} MCAP，请先打包")
     return [(episode_id, path)]
-
 
 
 def _run_mcap_export(episode_id, variant):
@@ -594,6 +594,9 @@ def _job_status(job):
         "started_at": job["started_at"],
         "returncode": job.get("returncode"),
         "error": job.get("error"),
+        "export_status": job.get("export_status"),
+        "export_error": job.get("export_error"),
+        "export_path": job.get("export_path"),
         "log": str(job["log"]),
         "max_duration": job.get("max_duration"),
     }
@@ -636,6 +639,8 @@ def collection_exit_error(log_path, returncode, label="进程"):
 
 def _publish_h264(episode_id, started_at):
     source = mcap_export_files(DATASET_ROOT, [episode_id], "h264")[0][1]
+    if COLLECTION_EXPORT_ROOT.is_symlink():
+        raise ValueError(f"输出根目录不能是符号链接：{COLLECTION_EXPORT_ROOT}")
     directory = COLLECTION_EXPORT_ROOT / datetime.fromtimestamp(started_at).strftime("%Y-%m-%d")
     if directory.is_symlink():
         raise ValueError(f"输出日期目录不能是符号链接：{directory}")
@@ -645,6 +650,7 @@ def _publish_h264(episode_id, started_at):
         if target.is_symlink() or not target.is_file() or not target.samefile(source):
             raise FileExistsError(f"输出文件已存在：{target}")
     else:
+        # @decision AUTO-H264-PUBLISH MCAP is immutable; a hard link avoids a second large on-disk copy.
         os.link(source, target)
     return target
 
@@ -678,7 +684,14 @@ def _start_automatic_h264_export(job):
     with STATE_LOCK:
         job["export_status"] = "running"
         job["export_error"] = None
-    threading.Thread(target=_automatic_h264_export, args=(job,), daemon=True).start()
+    try:
+        threading.Thread(target=_automatic_h264_export, args=(job,), daemon=False).start()
+    except RuntimeError as error:
+        EXPORT_LOCK.release()
+        with STATE_LOCK:
+            job["export_status"] = "failed"
+            job["export_error"] = str(error)
+        print_status_error("H264 自动转换", str(error))
 
 
 def _watch_job(part, process, config_path, ready_file):
@@ -807,7 +820,7 @@ def request_robot_reset(payload):
             raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "机器人复位脚本或 Python 环境缺失")
         environment = os.environ.copy()
         environment["PYTHONPATH"] = os.pathsep.join(
-            filter(None, (str(PROJECT_ROOT), environment.get("PYTHONPATH")))
+            filter(None, (str(SOURCE_ROOT), environment.get("PYTHONPATH")))
         )
         environment.pop("LD_PRELOAD", None)
         try:
@@ -943,7 +956,7 @@ def _start_collection(payload, part):
     command.append("--no-vision" if no_vision else "--vision")
     if "nsp_lateral" in payload:
         command.append("--nsp-lateral" if payload["nsp_lateral"] else "--no-nsp-lateral")
-    log_path = PROJECT_ROOT / "logs" / f"ui_{part}_{datetime.now():%Y%m%d_%H%M%S}.log"
+    log_path = LOG_ROOT / f"ui_{part}_{datetime.now():%Y%m%d_%H%M%S}.log"
     log_path.parent.mkdir(exist_ok=True)
     with log_path.open("ab", buffering=0) as log:
         try:
@@ -973,6 +986,9 @@ def _start_collection(payload, part):
         "ready_file": ready_file,
         "vision_enabled": not no_vision,
         "max_duration": duration,
+        "export_status": None,
+        "export_error": None,
+        "export_path": None,
     }
     with STATE_LOCK:
         if part == "recording":
@@ -1046,7 +1062,7 @@ def _restart_pico():
     if not ROBOTICS_SERVICE_SCRIPT.is_file():
         raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, "Robotics Service 启动脚本不存在")
     service_started = False
-    service_log = PROJECT_ROOT / "logs" / "ui_robotics_service.log"
+    service_log = LOG_ROOT / "ui_robotics_service.log"
     service_log.parent.mkdir(exist_ok=True)
     ports = robotics_service_ports()
     if pico_ports_ready(ports):
