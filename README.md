@@ -1,77 +1,69 @@
-# pico teleop
+# PICO → Marvin 双臂遥操与数据采集
 
-## 迁移
+本项目通过 PICO 手柄遥操 Marvin 双臂，并采集 PICO、机器人、DAS 夹爪和双目相机数据。项目包含 ROS 2 数据链路、MCAP 录制与后处理工具，以及本地 Web 控制台。
 
-### Wave 1：PICO → MuJoCo
+> Web 停止按钮和程序退出不是急停。实机运行前必须确认物理急停、关节映射、机器人型号和工作区安全；发生异常运动时立即使用物理急停。
 
-  先迁移：
+## 快速开始
 
-  - XR native binding；
-  - xr_client；
-  - 坐标映射；
-  - controller；
-  - Marvin IK；
-  - MuJoCo adapter；
-  - 仿真 CLI。
+运行环境为 Ubuntu 22.04、Python 3.10 和 ROS 2 Humble。首次安装请阅读[部署指南](docs/deployment/部署指南.md)。
 
-  验收：
+```bash
+source /opt/ros/humble/setup.bash
+uv sync
+uv run teleop-web --self-test
+uv run teleop-web
+```
 
-  .venv/bin/python -m unittest \
-    tests.test_marvin_controller \
-    tests.test_marvin_simulation -v
+浏览器访问 <http://127.0.0.1:4173>。远程使用 NUC 时可建立 SSH 隧道：
 
-  这是第一条完整闭环，不连接机器人。
+```bash
+ssh -L 4173:127.0.0.1:4173 zxcx@192.168.1.11
+```
 
-  ### Wave 2：Marvin 与 DAS
+运行前检查并按现场环境修改：
 
-  迁移厂家适配器和实机入口，保持这些行为不变：
+- `config/collection.json`：机器人、采集、输出和运行时配置；
+- `config/das_gripper.example.json`：DAS 夹爪、串口和相机配置；
+- `config/collection.nuc.json`：NUC 的 CPU 亲和性配置。
 
-  - 内部关节单位为弧度，厂家边界才转换成角度；
-  - 14 轴顺序固定为 [A1..A7, B1..B7]；
-  - XR 断流时保持当前目标；
-  - Grip 松开时重新锚定；
-  - B 回位只在双 Grip 松开时生效；
-  - 实机确认参数不能删除。
+验证配置：
 
-  验收：
+```bash
+uv run teleop-collect --config config/collection.json --print-effective-config
+```
 
-  .venv/bin/python -m unittest \
-    tests.test_marvin_interfaces \
-    tests.test_marvin_entrypoints -v
+## 常用入口
 
-  ### Wave 3：ROS 与数据采集
+```bash
+uv run teleop-web                 # Web 控制台
+uv run teleop-collect --help      # 完整采集流程
+uv run teleop-hardware --help     # 实机遥操
+uv run teleop-postprocess --help  # Episode 后处理
+uv run teleop-validate --help     # Episode 校验
+```
 
-  迁移：
+完整参数、标定、复位和数据迁移命令见[操作指南](docs/operations/操作指南.md)。
 
-  - ROS 协议；
-  - PICO/DAS 发布器；
-  - recorder；
-  - Episode 后处理；
-  - AV1/H.264/MJPEG；
-  - supervisor。
+## 项目结构
 
-  ROS topic 和已有 MCAP 格式保持不变。
+| 路径 | 内容 |
+| --- | --- |
+| `src/xr_marvin_teleop/` | 控制器、设备适配器、ROS 2、采集与 CLI |
+| `config/` | 采集、DAS 和相机配置 |
+| `legacy/ros2_ws/` | ROS 2 消息与工作区 |
+| `ui/` | Web 控制台前端和架构说明 |
+| `tests/` | 无硬件单元测试与实机检查 |
+| `tools/` | 延迟日志分析工具 |
+| `vendor/` | 本地厂家 SDK；部分内容不纳入 Git |
 
-  验收：
+控制与采集的数据流见[控制链路](docs/deployment/控制链路.md)，部署验收项见[检查清单](docs/deployment/check.md)。
 
-  .venv/bin/python -m unittest \
-    tests.test_marvin_ros_data \
-    tests.test_collection_config \
-    tests.test_episode_postprocessor \
-    tests.test_episode_video -v
+## 测试
 
-  ### Wave 4：UI
+```bash
+uv run python -m unittest discover -s tests -v
+node ui/test.mjs
+```
 
-  最后迁移 UI 后端，让它只负责：
-
-  - 启动/停止 CLI；
-  - 查询设备状态；
-  - 展示日志和预览；
-  - 管理数据集。
-
-  UI 不直接导入控制器或厂家 SDK。
-
-  验收：
-
-  .venv/bin/python -m xr_marvin_teleop.web.server --self-test
-  node ui/test.mjs
+部分测试需要 ROS 2、MuJoCo、厂家 SDK 或已连接硬件；跳过原因会由测试输出说明。
