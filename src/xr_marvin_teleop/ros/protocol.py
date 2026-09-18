@@ -149,7 +149,11 @@ def pico_messages(snapshot, timestamp_ns):
     for message in (poses, joy):
         stamp(message.header, timestamp_ns, "openxr_local")
     if snapshot is not None:
-        for values in (snapshot.left_controller_pose, snapshot.right_controller_pose):
+        # Keep the two controller indices stable; Head is the optional third pose.
+        values_list = [snapshot.left_controller_pose, snapshot.right_controller_pose]
+        if snapshot.head_pose is not None:
+            values_list.append(snapshot.head_pose)
+        for values in values_list:
             pose = Pose()
             pose.position.x, pose.position.y, pose.position.z = map(float, values[:3])
             pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = map(float, values[3:])

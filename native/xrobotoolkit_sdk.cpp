@@ -34,6 +34,7 @@ struct XrSnapshot
     int64_t sdk_callback_gap_ns = 0;
     uint64_t sdk_callback_sequence = 0;
     int64_t timestamp_ns;
+    Pose head_pose;
     Pose left_controller_pose;
     Pose right_controller_pose;
     std::array<double, 2> grip_values;
@@ -117,12 +118,14 @@ XrSnapshot parse_snapshot(const PXREADevStateJson& device_state)
     JsonObject value = parse_json(encoded_value);
 
     json_object* controllers = require_member(value.get(), "Controller");
+    json_object* head = require_member(value.get(), "Head");
     json_object* left_controller = require_member(controllers, "left");
     json_object* right_controller = require_member(controllers, "right");
 
     XrSnapshot snapshot{};
     snapshot.timestamp_ns =
         json_object_get_int64(require_member(value.get(), "timeStampNs"));
+    snapshot.head_pose = parse_pose(head);
     snapshot.left_controller_pose = parse_pose(left_controller);
     snapshot.right_controller_pose = parse_pose(right_controller);
     snapshot.grip_values = {
@@ -229,6 +232,7 @@ py::object get_snapshot()
     // Python allocation must not hold up the SDK callback's snapshot publication.
     py::dict result;
     result["timestamp_ns"] = snapshot->timestamp_ns;
+    result["head_pose"] = snapshot->head_pose;
     result["left_controller_pose"] = snapshot->left_controller_pose;
     result["right_controller_pose"] = snapshot->right_controller_pose;
     result["grip_values"] = snapshot->grip_values;

@@ -95,7 +95,8 @@ class TestProtocol(unittest.TestCase):
         now = time.time_ns()
         joiner = SampleJoiner(PICO_TOPICS, 200_000_000)
         snapshot = XrSnapshot(123, [0, 0, 0, 0, 0, 0, 1], [1, 0, 0, 0, 0, 0, 1],
-                              (0.2, 0.3), True, False, (0.4, 0.5), (-1, 1), True, False)
+                              (0.2, 0.3), True, False, (0.4, 0.5), (-1, 1), True, False,
+                              head_pose=[0, 1.7, 0, 0, 0, 0, 1])
         def records(stamp, session="a", sequence=1, valid=True):
             poses, joy = pico_messages(snapshot if valid else None, stamp)
             metadata = sample_status(PICO_TOPICS, stamp, session, sequence, time.monotonic_ns(),
@@ -103,6 +104,7 @@ class TestProtocol(unittest.TestCase):
             return self.roundtrip(poses), self.roundtrip(joy), self.roundtrip(metadata)
 
         poses, joy, status = records(now)
+        self.assertEqual(len(poses.poses), 3)
         self.assertIsNone(joiner.push(PICO_TOPICS[0], poses))
         self.assertIsNone(joiner.push("status", status))
         # A neighboring frame must never supply the missing Joy.

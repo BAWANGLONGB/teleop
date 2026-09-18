@@ -28,6 +28,7 @@ from xr_marvin_teleop.adapters.xr import XrClient, XrSnapshot
 from xr_marvin_teleop.control.mapping import (
     XrTargetMapper,
     transform_controller_poses_to_marvin_frame,
+    yaw_rotation_from_openxr_pose,
 )
 from xr_marvin_teleop.adapters.marvin import (
     MarvinModbusGripperConfiguration,
@@ -76,6 +77,7 @@ class FakeXrSdk:
             timestamp_ns = self.timestamps[0]
         return {
             "timestamp_ns": timestamp_ns,
+            "head_pose": make_openxr_pose(),
             "left_controller_pose": make_openxr_pose(-0.1),
             "right_controller_pose": make_openxr_pose(0.1),
             "grip_values": (0.0, 0.0),

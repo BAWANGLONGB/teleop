@@ -32,6 +32,7 @@ class TestMarvinRosData(unittest.TestCase):
         self.assertTrue(xr_sdk.initialized)
         self.assertEqual(snapshot.timestamp_ns, 2)
         np.testing.assert_allclose(snapshot.left_controller_pose[0], -0.1)
+        np.testing.assert_allclose(snapshot.head_pose, make_openxr_pose())
         xr_client.close()
         self.assertTrue(xr_sdk.closed)
 
@@ -123,6 +124,11 @@ class TestMarvinRosData(unittest.TestCase):
                 sequence_id=sequence_id,
                 source_timestamp_ns=timestamp_ns,
                 valid=True,
+                head_pose=(
+                    None
+                    if sequence_id == 10
+                    else make_openxr_pose(y_meters=1.7)
+                ),
                 left_controller_pose=make_openxr_pose(),
                 right_controller_pose=make_openxr_pose(),
                 grip_values=(0.0, 0.0),
@@ -150,6 +156,7 @@ class TestMarvinRosData(unittest.TestCase):
         self.assertEqual(client._update_id, 2)
         self.assertEqual(client._snapshot.timestamp_ns, 200)
         self.assertTrue(client._snapshot.button_x)
+        self.assertAlmostEqual(client._snapshot.head_pose[1], 1.7)
 
 
     def test_ros_das_client_maps_feedback_and_publishes_commands(self):

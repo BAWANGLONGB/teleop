@@ -97,15 +97,27 @@ class RosPicoClient:
             snapshot = None
             if values["valid"]:
                 poses, joy = parts[self._topics[0]], parts[self._topics[1]]
-                if (len(poses.poses) != 2 or len(joy.axes) != 6 or len(joy.buttons) != 4
+                if (len(poses.poses) not in (2, 3) or len(joy.axes) != 6 or len(joy.buttons) != 4
                         or any(value not in (0, 1) for value in joy.buttons)
                         or poses.header.frame_id != "openxr_local" or joy.header.frame_id != "openxr_local"):
-                    raise ValueError("invalid PICO v2 layout/frame")
+                    raise ValueError("invalid PICO layout/frame")
                 snapshot = XrSnapshot(
-                    values["source_timestamp_ns"], *(pose_values(pose) for pose in poses.poses),
-                    tuple(joy.axes[:2]), bool(joy.buttons[0]), bool(joy.buttons[1]),
-                    tuple(joy.axes[2:4]), tuple(joy.axes[4:6]),
-                    bool(joy.buttons[2]), bool(joy.buttons[3]))
+                    timestamp_ns=values["source_timestamp_ns"],
+                    left_controller_pose=pose_values(poses.poses[0]),
+                    right_controller_pose=pose_values(poses.poses[1]),
+                    grip_values=tuple(joy.axes[:2]),
+                    button_a=bool(joy.buttons[0]),
+                    button_b=bool(joy.buttons[1]),
+                    trigger_values=tuple(joy.axes[2:4]),
+                    thumbstick_y_values=tuple(joy.axes[4:6]),
+                    button_x=bool(joy.buttons[2]),
+                    button_y=bool(joy.buttons[3]),
+                    head_pose=(
+                        pose_values(poses.poses[2])
+                        if len(poses.poses) == 3
+                        else None
+                    ),
+                )
         except (ValueError, TypeError, KeyError, AttributeError):
             self._joiner.last_outcome = "malformed"
             with self._condition:

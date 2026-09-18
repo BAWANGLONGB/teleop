@@ -27,6 +27,7 @@ class XrSnapshot:
     thumbstick_y_values: tuple[float, float] = (0.0, 0.0)
     button_x: bool = False
     button_y: bool = False
+    head_pose: np.ndarray | None = None
     # Local diagnostics only: not part of the ROS payload or source-clock arithmetic.
     timing: dict = field(default_factory=dict, compare=False, repr=False)
 
@@ -35,14 +36,17 @@ class XrSnapshot:
         if timestamp_ns <= 0:
             raise ValueError("timestamp_ns must be positive")
         object.__setattr__(self, "timestamp_ns", timestamp_ns)
-        for field_name in (
-            "left_controller_pose",
-            "right_controller_pose",
-        ):
+        for field_name in ("left_controller_pose", "right_controller_pose"):
             object.__setattr__(
                 self,
                 field_name,
                 _validate_openxr_pose(getattr(self, field_name), field_name),
+            )
+        if self.head_pose is not None:
+            object.__setattr__(
+                self,
+                "head_pose",
+                _validate_openxr_pose(self.head_pose, "head_pose"),
             )
         grip_values = tuple(float(value) for value in self.grip_values)
         if (

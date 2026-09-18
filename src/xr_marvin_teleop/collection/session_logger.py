@@ -112,6 +112,7 @@ class MarvinSessionLogger:
             "right_controller_pose": (
                 None if xr_snapshot is None else xr_snapshot.right_controller_pose
             ),
+            "head_pose": None if xr_snapshot is None else xr_snapshot.head_pose,
             "grip_values": None if xr_snapshot is None else xr_snapshot.grip_values,
             "trigger_values": (
                 None if xr_snapshot is None else xr_snapshot.trigger_values
