@@ -19,7 +19,7 @@
     "nsp_lateral_deadzone": 0.03, "nsp_lateral_range": 0.12,
     "nsp_lateral_sign_left": 1, "nsp_lateral_sign_right": 1
   },
-  "capture": {"vision_enabled": true, "pico_poll_hz": 50.0, "max_duration_s": null},
+  "capture": {"vision_enabled": true, "pico_poll_hz": 100.0, "max_duration_s": null},
   "recording": {
     "state_cache_bytes": 268435456,
     "state_storage": "ros/mcap_state.yaml",
