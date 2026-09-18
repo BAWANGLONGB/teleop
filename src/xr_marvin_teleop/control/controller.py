@@ -791,6 +791,7 @@ class MarvinHardwareTeleopController:
         )
 
     def execute_control_cycle(self, cycle_time_seconds=None):
+        # 控制循环的主要执行函数。它读取XR快照和机器人反馈，计算关节命令，并发送命令到机器人。
         if not self._hardware_prepared:
             raise RuntimeError("prepare_hardware() must run before control cycles")
         if cycle_time_seconds is None:

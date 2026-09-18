@@ -24,9 +24,10 @@ from urllib.parse import parse_qs, urlsplit
 
 UI_ROOT = Path(__file__).resolve().parent
 WORKSPACE = UI_ROOT.parent
-PROJECT_ROOT = WORKSPACE / "xr-marvin-teleop"
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+PROJECT_ROOT = WORKSPACE
+SOURCE_ROOT = PROJECT_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from xr_marvin_teleop.collection.episode_package import read_attachment, write_episode_mcap
 from xr_marvin_teleop.collection.config import DEFAULT_CONFIG, load_config, validate_config
@@ -41,6 +42,7 @@ COLLECTION_SETTINGS = validate_config(load_config())
 
 ROS_BASE_SETUP = Path("/opt/ros/humble/setup.bash")
 DATASET_ROOT = Path(COLLECTION_SETTINGS["paths"]["output_root"])
+COLLECTION_EXPORT_ROOT = WORKSPACE / "var" / "collection"
 COLLECTION_MODULE = "xr_marvin_teleop.cli.collection"
 RESET_MODULE = "xr_marvin_teleop.cli.reset"
 POSTPROCESS_MODULE = "xr_marvin_teleop.cli.postprocess"
@@ -110,7 +112,7 @@ def teleop_environment():
         key, separator, value = item.partition(b"=")
         if separator:
             environment[os.fsdecode(key)] = os.fsdecode(value)
-    environment["PYTHONPATH"] = os.pathsep.join(filter(None, (str(PROJECT_ROOT), environment.get("PYTHONPATH"))))
+    environment["PYTHONPATH"] = os.pathsep.join(filter(None, (str(SOURCE_ROOT), environment.get("PYTHONPATH"))))
     environment.pop("LD_PRELOAD", None)
     return environment
 
@@ -197,6 +199,42 @@ def mcap_export_files(dataset_root, episode_ids, variant="av1"):
 
 
 
+def _run_mcap_export(episode_id, variant):
+    try:
+        mcap_export_files(DATASET_ROOT, [episode_id], variant)
+        return {"ready": True}
+    except ApiError as error:
+        if error.status != HTTPStatus.UNPROCESSABLE_ENTITY:
+            raise
+    with START_LOCK:
+        if collection_active():
+            raise ApiError(HTTPStatus.CONFLICT, "请先停止录制并等待原始数据保存完成")
+    episode = episode_path(DATASET_ROOT, episode_id, prefer_directory=True)
+    if not episode.is_dir():
+        raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "旧格式请先迁移")
+    if read_json(episode / "metadata.json").get("status") not in ("completed", "validated", "degraded"):
+        raise ApiError(HTTPStatus.CONFLICT, "本段未正常结束，不能打包")
+    log_path = episode / "export.log"
+    command = [str(TELEOP_PYTHON), "-m", POSTPROCESS_MODULE,
+               str(episode), "--output-root", str(DATASET_ROOT), "--add-missing"]
+    command.extend(
+        f"--{name}" if variant == name else f"--no-{name}"
+        for name in VIDEO_VARIANTS
+    )
+    if variant in ("h264", "av1"):
+        for suffix in ("crf", "preset", "keyint", "threads"):
+            name = f"{variant}_{suffix}"
+            command += ["--" + name.replace("_", "-"), str(COLLECTION_SETTINGS["export"][name])]
+    with log_path.open("ab", buffering=0) as log:
+        result = subprocess.run(command, cwd=PROJECT_ROOT, env=teleop_environment(),
+                                stdout=log, stderr=subprocess.STDOUT)
+    if result.returncode:
+        raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
+                       collection_exit_error(log_path, result.returncode, "MCAP 打包") + f"；日志：{log_path}")
+    mcap_export_files(DATASET_ROOT, [episode_id], variant)
+    return {"ready": True}
+
+
 def prepare_mcap_export(payload):
     variant = payload.get("format", "av1")
     episode_id = payload.get("episode")
@@ -205,39 +243,7 @@ def prepare_mcap_export(payload):
     if not EXPORT_LOCK.acquire(blocking=False):
         raise ApiError(HTTPStatus.CONFLICT, "正在启动或打包，请稍后重试")
     try:
-        try:
-            mcap_export_files(DATASET_ROOT, [episode_id], variant)
-            return {"ready": True}
-        except ApiError as error:
-            if error.status != HTTPStatus.UNPROCESSABLE_ENTITY:
-                raise
-        with START_LOCK:
-            if collection_active():
-                raise ApiError(HTTPStatus.CONFLICT, "请先停止录制并等待原始数据保存完成")
-        episode = episode_path(DATASET_ROOT, episode_id, prefer_directory=True)
-        if not episode.is_dir():
-            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "旧格式请先迁移")
-        if read_json(episode / "metadata.json").get("status") not in ("completed", "validated", "degraded"):
-            raise ApiError(HTTPStatus.CONFLICT, "本段未正常结束，不能打包")
-        log_path = episode / "export.log"
-        command = [str(TELEOP_PYTHON), "-m", POSTPROCESS_MODULE,
-                   str(episode), "--output-root", str(DATASET_ROOT), "--add-missing"]
-        command.extend(
-            f"--{name}" if variant == name else f"--no-{name}"
-            for name in VIDEO_VARIANTS
-        )
-        if variant in ("h264", "av1"):
-            for suffix in ("crf", "preset", "keyint", "threads"):
-                name = f"{variant}_{suffix}"
-                command += ["--" + name.replace("_", "-"), str(COLLECTION_SETTINGS["export"][name])]
-        with log_path.open("ab", buffering=0) as log:
-            result = subprocess.run(command, cwd=PROJECT_ROOT, env=teleop_environment(),
-                                    stdout=log, stderr=subprocess.STDOUT)
-        if result.returncode:
-            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
-                           collection_exit_error(log_path, result.returncode, "MCAP 打包") + f"；日志：{log_path}")
-        mcap_export_files(DATASET_ROOT, [episode_id], variant)
-        return {"ready": True}
+        return _run_mcap_export(episode_id, variant)
     finally:
         EXPORT_LOCK.release()
 
@@ -628,6 +634,53 @@ def collection_exit_error(log_path, returncode, label="进程"):
     return f"{message}：{detail[:600]}" if detail else message
 
 
+def _publish_h264(episode_id, started_at):
+    source = mcap_export_files(DATASET_ROOT, [episode_id], "h264")[0][1]
+    directory = COLLECTION_EXPORT_ROOT / datetime.fromtimestamp(started_at).strftime("%Y-%m-%d")
+    if directory.is_symlink():
+        raise ValueError(f"输出日期目录不能是符号链接：{directory}")
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / source.name
+    if target.exists():
+        if target.is_symlink() or not target.is_file() or not target.samefile(source):
+            raise FileExistsError(f"输出文件已存在：{target}")
+    else:
+        os.link(source, target)
+    return target
+
+
+def _automatic_h264_export(job):
+    try:
+        _run_mcap_export(job["episode_id"], "h264")
+        output = _publish_h264(job["episode_id"], job["started_at"])
+    except (ApiError, OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        message = error.message if isinstance(error, ApiError) else str(error)
+        with STATE_LOCK:
+            job["export_status"] = "failed"
+            job["export_error"] = message
+        print_status_error("H264 自动转换", message)
+    else:
+        with STATE_LOCK:
+            job["export_status"] = "completed"
+            job["export_path"] = str(output)
+        print_status_error("H264 自动转换", None)
+    finally:
+        EXPORT_LOCK.release()
+
+
+def _start_automatic_h264_export(job):
+    if not EXPORT_LOCK.acquire(blocking=False):
+        with STATE_LOCK:
+            job["export_status"] = "failed"
+            job["export_error"] = "已有导出任务在运行"
+        print_status_error("H264 自动转换", job["export_error"])
+        return
+    with STATE_LOCK:
+        job["export_status"] = "running"
+        job["export_error"] = None
+    threading.Thread(target=_automatic_h264_export, args=(job,), daemon=True).start()
+
+
 def _watch_job(part, process, config_path, ready_file):
     returncode = process.wait()
     config_path.unlink(missing_ok=True)
@@ -638,6 +691,7 @@ def _watch_job(part, process, config_path, ready_file):
                 (PREVIEW_ROOT / f"{side}.jpg").unlink(missing_ok=True)
             except OSError:
                 pass
+    completed_recording = None
     with STATE_LOCK:
         job = COLLECTION if part == "recording" else DEVICES
         if job and job["process"] is process:
@@ -647,6 +701,10 @@ def _watch_job(part, process, config_path, ready_file):
                 job["log"], returncode, "录制进程" if part == "recording" else "设备进程"
             )
             print_status_error("录制" if part == "recording" else "设备", job["error"])
+            if part == "recording" and returncode == 0:
+                completed_recording = job
+    if completed_recording is not None:
+        _start_automatic_h264_export(completed_recording)
     if part == "devices" and collection_active():
         stop_collection()
 
