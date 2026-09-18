@@ -321,11 +321,13 @@ class FakeMarvinVendorKinematics:
         self.fail_inverse_kinematics = False
         self.nsp_reference_calls = []
         self.nsp_angles_deg = []
+        self.fk_calls = []
 
     def set_nsp_reference(self, arm, q_rad):
         self.nsp_reference_calls.append((arm, np.asarray(q_rad).copy()))
 
-    def fk_world(self, _arm, q_rad):
+    def fk_world(self, arm, q_rad):
+        self.fk_calls.append((arm, np.asarray(q_rad).copy()))
         tcp_transform = np.eye(4)
         tcp_transform[0, 3] = q_rad[0]
         return tcp_transform

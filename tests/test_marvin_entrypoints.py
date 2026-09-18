@@ -1,6 +1,8 @@
 """Hardware CLI, reset, and collection supervisor tests."""
 
+import sys
 import unittest
+from unittest.mock import Mock, patch
 
 from tests.marvin_hardware_fakes import (
     FakeMarvinSdkAdapter,
@@ -13,6 +15,43 @@ from tests.marvin_hardware_fakes import (
 
 
 class TestMarvinEntrypoints(unittest.TestCase):
+    def test_ros2_hardware_skips_duplicate_jsonl_log(self):
+        from xr_marvin_teleop.cli import hardware
+
+        required = [
+            "--enable-hardware",
+            "--confirmed-estop",
+            "--confirmed-joint-mapping",
+            "--confirmed-robot-model",
+            "M6S",
+        ]
+        controller = Mock(scale_factor=1.0)
+        with (
+            patch.object(hardware, "XrClient"),
+            patch.object(hardware, "RosPicoClient"),
+            patch.object(hardware, "MarvinVendorKinematics"),
+            patch.object(hardware, "load_active_tool_configs", return_value=()),
+            patch.object(hardware, "Ros2DataBridge"),
+            patch.object(hardware, "MarvinSdkAdapter"),
+            patch.object(
+                hardware,
+                "MarvinHardwareTeleopController",
+                return_value=controller,
+            ),
+            patch.object(hardware, "MarvinSessionLogger") as session_logger,
+        ):
+            with patch.object(
+                sys,
+                "argv",
+                ["teleop-hardware", *required, "--ros2", "--pico-from-ros2"],
+            ):
+                hardware.main()
+            session_logger.assert_not_called()
+
+            with patch.object(sys, "argv", ["teleop-hardware", *required]):
+                hardware.main()
+            session_logger.assert_called_once()
+
     def test_hardware_cli_does_not_enable_das_by_default(self):
         entry_path = (
             Path(__file__).resolve().parents[1]

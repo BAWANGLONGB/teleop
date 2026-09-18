@@ -31,6 +31,9 @@ MARVIN_ARM_BASE_TO_WORLD_TRANSFORMS = np.array(
         ],
     ]
 )
+MARVIN_WORLD_TO_ARM_BASE_TRANSFORMS = np.linalg.inv(
+    MARVIN_ARM_BASE_TO_WORLD_TRANSFORMS
+)
 
 
 def _validate_homogeneous_transform(transform, field_name):
@@ -251,7 +254,7 @@ class MarvinVendorKinematics:
                     "NSP reference plane is not configured",
                 )
         T_arm_tcp_mm = (
-            np.linalg.inv(MARVIN_ARM_BASE_TO_WORLD_TRANSFORMS[arm])
+            MARVIN_WORLD_TO_ARM_BASE_TRANSFORMS[arm]
             @ T_world_tcp_m
         )
         T_arm_tcp_mm[:3, 3] *= 1e3

@@ -149,10 +149,18 @@ class MarvinRobotState:
             "arm_state",
             "impedance_type",
             "error_code",
-            "low_speed",
         ):
-            if len(getattr(self, field_name)) != 2:
+            values = getattr(self, field_name)
+            if len(values) != 2:
                 raise ValueError(f"{field_name} must contain left and right values")
+            object.__setattr__(self, field_name, tuple(int(value) for value in values))
+        if len(self.low_speed) != 2:
+            raise ValueError("low_speed must contain left and right values")
+        object.__setattr__(
+            self,
+            "low_speed",
+            tuple(_convert_sdk_flag_to_boolean(value) for value in self.low_speed),
+        )
         object.__setattr__(
             self,
             "q_rad",
@@ -260,26 +268,6 @@ class MarvinSdkAdapter:
         version_getter = getattr(self._marvin_robot, "SDK_version", None)
         return None if version_getter is None else version_getter()
 
-    @staticmethod
-    def _read_arm_values(raw_feedback, group_name, field_name):
-        feedback_group = raw_feedback.get(group_name)
-        if not isinstance(feedback_group, list) or len(feedback_group) < 2:
-            raise ValueError(f"feedback group {group_name!r} must contain both arms")
-        return tuple(feedback_group[index][field_name] for index in range(2))
-
-    @classmethod
-    def _read_joint_values(cls, raw_feedback, group_name, field_name):
-        arm_values = cls._read_arm_values(raw_feedback, group_name, field_name)
-        joint_values = [
-            np.asarray(values, dtype=float).reshape(-1) for values in arm_values
-        ]
-        if any(
-            values.shape != (7,) or not np.all(np.isfinite(values))
-            for values in joint_values
-        ):
-            raise ValueError(f"{group_name}.{field_name} must contain two 7-vectors")
-        return np.concatenate(joint_values)
-
     def read_state(self):
         if not self._is_connected:
             raise RuntimeError("Marvin control SDK is not connected")
@@ -290,44 +278,25 @@ class MarvinSdkAdapter:
         raw_feedback = self._marvin_robot.subscribe(self._dcss_structure)
         if not isinstance(raw_feedback, dict):
             raise RuntimeError("Marvin subscribe() returned invalid feedback")
-        q_deg = self._read_joint_values(
-            raw_feedback, "outputs", "fb_joint_pos"
+        outputs = raw_feedback["outputs"]
+        states = raw_feedback["states"]
+        inputs = raw_feedback["inputs"]
+        q_deg = np.concatenate(
+            (outputs[0]["fb_joint_pos"], outputs[1]["fb_joint_pos"])
         )
-        dq_deg_s = self._read_joint_values(
-            raw_feedback, "outputs", "fb_joint_vel"
+        dq_deg_s = np.concatenate(
+            (outputs[0]["fb_joint_vel"], outputs[1]["fb_joint_vel"])
         )
         return MarvinRobotState(
-            frame_serial=tuple(
-                int(value)
-                for value in self._read_arm_values(
-                    raw_feedback, "outputs", "frame_serial"
-                )
-            ),
+            frame_serial=(outputs[0]["frame_serial"], outputs[1]["frame_serial"]),
             q_rad=np.deg2rad(q_deg),
             dq_rad_s=np.deg2rad(dq_deg_s),
-            arm_state=tuple(
-                int(value)
-                for value in self._read_arm_values(
-                    raw_feedback, "states", "cur_state"
-                )
-            ),
-            impedance_type=tuple(
-                int(value)
-                for value in self._read_arm_values(
-                    raw_feedback, "inputs", "imp_type"
-                )
-            ),
-            error_code=tuple(
-                int(value)
-                for value in self._read_arm_values(
-                    raw_feedback, "states", "err_code"
-                )
-            ),
-            low_speed=tuple(
-                _convert_sdk_flag_to_boolean(value)
-                for value in self._read_arm_values(
-                    raw_feedback, "outputs", "low_speed_flag"
-                )
+            arm_state=(states[0]["cur_state"], states[1]["cur_state"]),
+            impedance_type=(inputs[0]["imp_type"], inputs[1]["imp_type"]),
+            error_code=(states[0]["err_code"], states[1]["err_code"]),
+            low_speed=(
+                outputs[0]["low_speed_flag"],
+                outputs[1]["low_speed_flag"],
             ),
         )
 
@@ -381,26 +350,26 @@ class MarvinSdkAdapter:
             raise RuntimeError(f"Marvin {transaction_name} send failed")
 
     def send_joint_command(self, q_rad, wait_response=False):
-        q_rad = _validated_joint_vector(q_rad, "q_rad")
-        q_deg = np.rad2deg(q_rad)
-        self._send_transaction(
-            (
-                (
-                    "left joint target",
-                    lambda: self._marvin_robot.set_joint_cmd_pose(
-                        arm="A", joints=q_deg[:7].tolist()
-                    ),
-                ),
-                (
-                    "right joint target",
-                    lambda: self._marvin_robot.set_joint_cmd_pose(
-                        arm="B", joints=q_deg[7:].tolist()
-                    ),
-                ),
-            ),
-            wait_response,
-            "joint position command",
-        )
+        q_deg = np.rad2deg(_validated_joint_vector(q_rad, "q_rad"))
+        if not self._is_connected:
+            raise RuntimeError("Marvin control SDK is not connected")
+        self._wait_for_command_buffer()
+        if not self._marvin_robot.set_joint_cmd_pose(
+            arm="A", joints=q_deg[:7].tolist()
+        ):
+            raise RuntimeError("Marvin left joint target failed")
+        if not self._marvin_robot.set_joint_cmd_pose(
+            arm="B", joints=q_deg[7:].tolist()
+        ):
+            raise RuntimeError("Marvin right joint target failed")
+        if wait_response:
+            response = self._marvin_robot.send_cmd_wait_response(1000)
+            if response is None or response == 0:
+                raise TimeoutError("Marvin joint command response timed out")
+            if response < 0:
+                raise RuntimeError("Marvin joint command returned an error")
+        elif not self._marvin_robot.send_cmd():
+            raise RuntimeError("Marvin joint command send failed")
 
     def send_gripper_command(self, closedness):
         if not self._is_connected:

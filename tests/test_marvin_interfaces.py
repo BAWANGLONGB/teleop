@@ -71,7 +71,12 @@ class TestMarvinInterfaces(unittest.TestCase):
             fake_marvin_robot.pd_velocity_estimation_steps,
             {"A": 20, "B": 20},
         )
+        adapter._send_transaction = lambda *_args, **_kwargs: self.fail(
+            "joint commands must bypass the generic transaction wrapper"
+        )
         adapter.send_joint_command(np.deg2rad(q_deg))
+        adapter.send_joint_command(np.deg2rad(q_deg), wait_response=True)
+        self.assertEqual(fake_marvin_robot.wait_response_calls, 1)
         np.testing.assert_allclose(
             fake_marvin_robot.q_commands_deg["A"], q_deg[:7]
         )

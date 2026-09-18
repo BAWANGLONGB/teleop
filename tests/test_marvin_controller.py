@@ -1,6 +1,7 @@
 """Shared controller behavior, calibration, NSP, and dropout regression tests."""
 
 import unittest
+from unittest.mock import patch
 
 from tests.marvin_hardware_fakes import (
     ArmLengthScaleCalibrator,
@@ -30,6 +31,69 @@ from tests.marvin_hardware_fakes import (
 
 
 class TestMarvinController(unittest.TestCase):
+    def test_idle_skips_controller_pose_conversion(self):
+        pose = make_openxr_pose()
+        released = XrSnapshot(1, pose, pose, (0.0, 0.0), False, False)
+        calibrating = XrSnapshot(2, pose, pose, (0.0, 0.0), True, False)
+        active = XrSnapshot(2, pose, pose, (1.0, 0.0), False, False)
+        controller = MarvinHardwareTeleopController(
+            FakeXRClient([released, released, calibrating, active]),
+            FakeMarvinSdkAdapter(),
+            FakeMarvinVendorKinematics(),
+            Path("unused.json"),
+            control_parameter_settle_seconds=0,
+            mode_settle_seconds=0,
+            pd_settle_seconds=0,
+        )
+        controller.prepare_hardware()
+        try:
+            with patch(
+                "xr_marvin_teleop.control.controller."
+                "transform_controller_poses_to_marvin_frame",
+                wraps=transform_controller_poses_to_marvin_frame,
+            ) as transform:
+                controller.execute_control_cycle(0.0)
+                transform.assert_not_called()
+                controller.execute_control_cycle(0.02)
+                transform.assert_called_once()
+                controller.execute_control_cycle(0.04)
+                self.assertEqual(transform.call_count, 2)
+        finally:
+            controller.shutdown_hardware()
+
+    def test_fk_runs_only_when_grip_creates_anchor(self):
+        pose = make_openxr_pose()
+        released = XrSnapshot(1, pose, pose, (0.0, 0.0), False, False)
+        left_active = XrSnapshot(2, pose, pose, (1.0, 0.0), False, False)
+        both_active = XrSnapshot(3, pose, pose, (1.0, 1.0), False, False)
+        kinematics = FakeMarvinVendorKinematics()
+        controller = MarvinHardwareTeleopController(
+            FakeXRClient(
+                [
+                    released,
+                    released,
+                    left_active,
+                    left_active,
+                    released,
+                    both_active,
+                    both_active,
+                ]
+            ),
+            FakeMarvinSdkAdapter(),
+            kinematics,
+            Path("unused.json"),
+            control_parameter_settle_seconds=0,
+            mode_settle_seconds=0,
+            pd_settle_seconds=0,
+        )
+        controller.prepare_hardware()
+        try:
+            for index in range(6):
+                controller.execute_control_cycle(index * 0.02)
+            self.assertEqual([arm for arm, _q in kinematics.fk_calls], [0, 0, 1])
+        finally:
+            controller.shutdown_hardware()
+
     def test_grip_locks_shared_head_yaw_until_both_hands_release(self):
         head_yaw_90 = make_openxr_pose()
         head_yaw_90[[4, 6]] = np.sqrt(0.5)

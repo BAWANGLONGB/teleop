@@ -313,8 +313,10 @@ def main():
             gripper_configurations=modbus_gripper_configurations,
             gripper_adapter=das_gripper_adapter,
         )
-        session_logger = MarvinSessionLogger(
-            arguments.log_directory, "hardware"
+        session_logger = (
+            None
+            if arguments.ros2
+            else MarvinSessionLogger(arguments.log_directory, "hardware")
         )
         teleop_controller = MarvinHardwareTeleopController(
             xr_client=xr_client,
@@ -378,7 +380,8 @@ def main():
             f"{arguments.confirmed_robot_model}"
         )
         print(f"Translation scale factor: {teleop_controller.scale_factor:.6f}")
-        print(f"Session log: {session_logger.path.resolve()}")
+        if session_logger is not None:
+            print(f"Session log: {session_logger.path.resolve()}")
         teleop_controller.run()
 
 

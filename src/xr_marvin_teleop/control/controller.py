@@ -284,11 +284,11 @@ class MarvinHardwareTeleopController:
 
     @staticmethod
     def _require_healthy_feedback(robot_feedback, require_impedance_mode):
-        if any(robot_feedback.error_code):
+        if robot_feedback.error_code != (0, 0):
             raise RuntimeError(
                 f"Marvin reported error codes {robot_feedback.error_code}"
             )
-        if any(arm_state == 100 for arm_state in robot_feedback.arm_state):
+        if 100 in robot_feedback.arm_state:
             raise RuntimeError(
                 f"Marvin reported error states {robot_feedback.arm_state}"
             )
@@ -302,7 +302,8 @@ class MarvinHardwareTeleopController:
                 f"imp_type={robot_feedback.impedance_type}"
             )
 
-    def _require_advancing_feedback(self, robot_feedback):
+    def _validate_feedback(self, robot_feedback):
+        self._require_healthy_feedback(robot_feedback, True)
         current_serials = robot_feedback.frame_serial
         if self._last_feedback_frame_serial is None:
             self._last_feedback_frame_serial = current_serials
@@ -507,8 +508,15 @@ class MarvinHardwareTeleopController:
                 if xr_snapshot.head_pose is None
                 else yaw_rotation_from_openxr_pose(xr_snapshot.head_pose)
             )
-        controller_poses_marvin = transform_controller_poses_to_marvin_frame(
-            xr_snapshot, self._head_yaw_rotation
+        needs_controller_poses = any(grip_states) or (
+            xr_snapshot.button_a and not self._previous_button_a
+        )
+        controller_poses_marvin = (
+            transform_controller_poses_to_marvin_frame(
+                xr_snapshot, self._head_yaw_rotation
+            )
+            if needs_controller_poses
+            else (None, None)
         )
         # 关闭头显跟随 Head tracking disabled
         # controller_poses_marvin = transform_controller_poses_to_marvin_frame(xr_snapshot)
@@ -548,10 +556,14 @@ class MarvinHardwareTeleopController:
         cycle_time_seconds,
     ):
         arm_slice = self._arm_joint_slice(arm_index)
-        current_tcp_transform = self.kinematics.fk_world(arm_index, arm_q_rad)
         if is_grip_active:
             self._return_start_times[arm_index] = None
             self._return_start_q_rad[arm_index] = None
+            current_tcp_transform = (
+                self.kinematics.fk_world(arm_index, arm_q_rad)
+                if not self._previous_grip_states[arm_index]
+                else None
+            )
             target_tcp_transform = self.pose_mapper.map_arm(
                 arm_index, controller_pose_marvin, current_tcp_transform, True
             )
@@ -573,9 +585,7 @@ class MarvinHardwareTeleopController:
                 return result.q_rad, True
             return self._last_commanded_q_rad[arm_slice], False
 
-        self.pose_mapper.map_arm(
-            arm_index, controller_pose_marvin, current_tcp_transform, False
-        )
+        self.pose_mapper.reset_arm(arm_index)
         command = self._last_commanded_q_rad[arm_slice].copy()
         if reset_requested:
             self._return_start_times[arm_index] = cycle_time_seconds
@@ -832,8 +842,7 @@ class MarvinHardwareTeleopController:
             wall_time_ns=time.time_ns(),
             steady_ns=time.monotonic_ns(),
         )
-        self._require_healthy_feedback(robot_feedback, True)
-        self._require_advancing_feedback(robot_feedback)
+        self._validate_feedback(robot_feedback)
         if xr_snapshot is None:
             if self._xr_frame_available:
                 print("PICO XR frame stale; holding joint targets.")

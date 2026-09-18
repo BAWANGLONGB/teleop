@@ -108,12 +108,14 @@ class XrTargetMapper:
             return None
 
         controller_position, controller_rotation = controller_pose_marvin
-        current_tcp_transform = np.asarray(current_tcp_transform, dtype=float)
-        if current_tcp_transform.shape != (4, 4) or not np.all(
-            np.isfinite(current_tcp_transform)
-        ):
-            raise ValueError("current_tcp_transform must be a finite 4x4 transform")
         if self._controller_pose_anchors[arm_index] is None:
+            current_tcp_transform = np.asarray(current_tcp_transform, dtype=float)
+            if current_tcp_transform.shape != (4, 4) or not np.all(
+                np.isfinite(current_tcp_transform)
+            ):
+                raise ValueError(
+                    "current_tcp_transform must be a finite 4x4 transform"
+                )
             self._controller_pose_anchors[arm_index] = (
                 controller_position.copy(),
                 controller_rotation.copy(),
