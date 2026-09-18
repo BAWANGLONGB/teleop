@@ -52,7 +52,7 @@ def load_vendor_sdk(sdk_root_path):
 
 
 def _validated_joint_vector(values, field_name):
-    joint_vector = np.asarray(values, dtype=float).reshape(-1).copy()
+    joint_vector = np.asarray(values, dtype=float).reshape(-1)
     if joint_vector.shape != (14,) or not np.all(np.isfinite(joint_vector)):
         raise ValueError(f"{field_name} must be a finite 14-joint vector")
     return joint_vector
