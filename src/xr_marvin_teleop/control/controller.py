@@ -13,7 +13,6 @@ from .postures import MARVIN_INITIAL_POSE_Q_RAD
 from .mapping import (
     XrTargetMapper,
     transform_controller_poses_to_marvin_frame,
-    yaw_rotation_from_openxr_pose,
 )
 
 
@@ -256,7 +255,6 @@ class MarvinHardwareTeleopController:
             requested_scale_factor, scale_calibration_path
         )
         self.pose_mapper = XrTargetMapper(scale_factor)
-        self._head_yaw_rotation = None
         self.scale_calibrator = ArmLengthScaleCalibrator()
         self._previous_grip_states = (False, False)
         self._previous_button_a = False
@@ -500,26 +498,14 @@ class MarvinHardwareTeleopController:
             value > self.grip_activation_threshold
             for value in xr_snapshot.grip_values
         )
-        if not any(grip_states):
-            self._head_yaw_rotation = None
-        elif self._head_yaw_rotation is None:
-            self._head_yaw_rotation = (
-                np.eye(3)
-                if xr_snapshot.head_pose is None
-                else yaw_rotation_from_openxr_pose(xr_snapshot.head_pose)
-            )
         needs_controller_poses = any(grip_states) or (
             xr_snapshot.button_a and not self._previous_button_a
         )
         controller_poses_marvin = (
-            transform_controller_poses_to_marvin_frame(
-                xr_snapshot, self._head_yaw_rotation
-            )
+            transform_controller_poses_to_marvin_frame(xr_snapshot)
             if needs_controller_poses
             else (None, None)
         )
-        # 关闭头显跟随 Head tracking disabled
-        # controller_poses_marvin = transform_controller_poses_to_marvin_frame(xr_snapshot)
 
         reset_requested = self._process_controls(
             xr_snapshot, controller_poses_marvin, grip_states, robot_feedback
@@ -848,7 +834,6 @@ class MarvinHardwareTeleopController:
                 print("PICO XR frame stale; holding joint targets.")
             self._xr_frame_available = False
             self.pose_mapper.reset_arm()
-            self._head_yaw_rotation = None
             self._previous_grip_states = (False, False)
             self._return_start_times = [None, None]
             self._return_start_q_rad = [None, None]

@@ -24,35 +24,9 @@ def rotation_matrix_from_openxr_pose(openxr_pose):
     )
 
 
-def yaw_rotation_from_openxr_pose(openxr_pose):
-    """Return the gravity-aligned heading captured from an OpenXR pose."""
-    rotation = rotation_matrix_from_openxr_pose(openxr_pose)
-    forward = rotation @ np.array([0.0, 0.0, -1.0])
-    forward[1] = 0.0
-    norm = np.linalg.norm(forward)
-    if norm < 1e-6:
-        right = rotation @ np.array([1.0, 0.0, 0.0])
-        right[1] = 0.0
-        right /= np.linalg.norm(right)
-        forward = np.cross(right, np.array([0.0, 1.0, 0.0]))
-    else:
-        forward /= norm
-        right = np.cross(forward, np.array([0.0, 1.0, 0.0]))
-    return np.column_stack((right, (0.0, 1.0, 0.0), -forward))
-
-
-def transform_controller_poses_to_marvin_frame(
-    xr_snapshot, reference_rotation=None
-):
-    """Express controller poses in Marvin axes and an optional captured heading."""
+def transform_controller_poses_to_marvin_frame(xr_snapshot):
+    """Express controller poses in fixed Marvin axes."""
     basis = OPENXR_TO_MARVIN_ROTATION
-    if reference_rotation is not None:
-        reference_rotation = np.asarray(reference_rotation, dtype=float)
-        if reference_rotation.shape != (3, 3) or not np.all(
-            np.isfinite(reference_rotation)
-        ):
-            raise ValueError("reference_rotation must be a finite 3x3 matrix")
-        basis = basis @ reference_rotation.T
     marvin_controller_poses = []
     for controller_pose in (
         xr_snapshot.left_controller_pose,

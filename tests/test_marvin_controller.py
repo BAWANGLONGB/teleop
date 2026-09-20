@@ -23,7 +23,6 @@ from tests.marvin_hardware_fakes import (
     save_scale_calibration,
     tempfile,
     transform_controller_poses_to_marvin_frame,
-    yaw_rotation_from_openxr_pose,
     VendorIkResult,
     XrSnapshot,
     XrTargetMapper,
@@ -94,44 +93,41 @@ class TestMarvinController(unittest.TestCase):
         finally:
             controller.shutdown_hardware()
 
-    def test_grip_locks_shared_head_yaw_until_both_hands_release(self):
+    def test_grip_motion_uses_fixed_axes_independent_of_head_pose(self):
         head_yaw_90 = make_openxr_pose()
         head_yaw_90[[4, 6]] = np.sqrt(0.5)
         pose = make_openxr_pose()
         startup = XrSnapshot(1, pose, pose, (0.0, 0.0), False, False)
         active = XrSnapshot(
-            2, pose, pose, (1.0, 0.0), False, False,
+            2, pose, pose, (1.0, 1.0), False, False,
             head_pose=head_yaw_90,
         )
-        turned_while_active = XrSnapshot(
-            3, pose, pose, (1.0, 1.0), False, False,
+        moved = XrSnapshot(
+            3, make_openxr_pose(x_meters=0.1), make_openxr_pose(z_meters=-0.2),
+            (1.0, 1.0), False, False,
             head_pose=make_openxr_pose(),
         )
-        released = XrSnapshot(4, pose, pose, (0.0, 0.0), False, False)
+        same_hands_turned_head = XrSnapshot(
+            4, moved.left_controller_pose, moved.right_controller_pose,
+            (1.0, 1.0), False, False,
+            head_pose=head_yaw_90,
+        )
+        kinematics = FakeMarvinVendorKinematics()
         controller = MarvinHardwareTeleopController(
-            FakeXRClient([startup, active, turned_while_active, released]),
-            FakeMarvinSdkAdapter(), FakeMarvinVendorKinematics(), Path("unused.json"),
+            FakeXRClient([startup, active, moved, same_hands_turned_head]),
+            FakeMarvinSdkAdapter(), kinematics, Path("unused.json"),
             requested_scale_factor=1.0, control_parameter_settle_seconds=0,
             mode_settle_seconds=0, pd_settle_seconds=0,
         )
         controller.prepare_hardware()
         try:
-            controller.execute_control_cycle(0.0)
-            captured = yaw_rotation_from_openxr_pose(head_yaw_90)
-            np.testing.assert_allclose(controller._head_yaw_rotation, captured)
-            moved = XrSnapshot(
-                5, make_openxr_pose(x_meters=0.1), pose,
-                (1.0, 0.0), False, False,
-            )
-            np.testing.assert_allclose(
-                transform_controller_poses_to_marvin_frame(moved, captured)[0][0],
-                [0.1, 0.0, 0.0],
-                atol=1e-12,
-            )
-            controller.execute_control_cycle(0.1)
-            np.testing.assert_allclose(controller._head_yaw_rotation, captured)
-            controller.execute_control_cycle(0.2)
-            self.assertIsNone(controller._head_yaw_rotation)
+            with patch.object(kinematics, "ik_world", wraps=kinematics.ik_world) as ik:
+                controller.execute_control_cycle(0.0)
+                controller.execute_control_cycle(0.02)
+                controller.execute_control_cycle(0.04)
+                targets = [call.args[1][:3, 3] for call in ik.call_args_list]
+                np.testing.assert_allclose(targets[2:4], [[0, 0.1, 0], [-0.2, 0, 0]])
+                np.testing.assert_allclose(targets[4:6], targets[2:4])
         finally:
             controller.shutdown_hardware()
 

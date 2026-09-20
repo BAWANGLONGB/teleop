@@ -58,6 +58,8 @@ KNOWN_CAMERA_FORMATS = {"640x480": (60,), "1600x1296": (60,)}
 STATE_LOCK = threading.Lock()
 START_LOCK = threading.Lock()
 EXPORT_LOCK = threading.Lock()
+EXPORT_STATE_LOCK = threading.Lock()
+EXPORT_STATE = {"episode": None, "process": None, "cancelled": False, "deleting": False}
 RESET_LOCK = threading.Lock()
 PICO_LOCK = threading.Lock()
 ERROR_LOCK = threading.Lock()
@@ -148,8 +150,8 @@ def episode_path(dataset_root, episode_id, *, prefer_directory=False):
     return path
 
 
-def move_episode_to_trash(dataset_root, episode_id, collection_active=False, *, session=None):
-    if EXPORT_LOCK.locked():
+def move_episode_to_trash(dataset_root, episode_id, collection_active=False, *, session=None, export_locked=False):
+    if EXPORT_LOCK.locked() and not export_locked:
         raise ApiError(HTTPStatus.CONFLICT, "正在导出，暂不能删除 Episode")
     if collection_active:
         raise ApiError(HTTPStatus.CONFLICT, "采集中不能删除 Episode")
@@ -164,8 +166,85 @@ def move_episode_to_trash(dataset_root, episode_id, collection_active=False, *, 
             raise ValueError("回收站路径无效")
         trash.mkdir(exist_ok=True)
         destination = trash / f"{source.parent.name}__{episode_id}_{time.time_ns()}{source.suffix}"
+        published = []
+        original = source / "final" / f"{episode_id}.h264.mcap"
+        if COLLECTION_EXPORT_ROOT.is_symlink():
+            raise ValueError(f"输出根目录不能是符号链接：{COLLECTION_EXPORT_ROOT}")
+        if source.is_dir() and original.is_file() and not original.is_symlink():
+            for candidate in COLLECTION_EXPORT_ROOT.glob(f"????-??-??/{original.name}"):
+                if not candidate.parent.is_symlink() and not candidate.is_symlink() and candidate.is_file() and candidate.samefile(original):
+                    published.append(candidate)
         source.replace(destination)
+        removed = []
+        try:
+            for candidate in published:
+                candidate.unlink()
+                removed.append(candidate)
+        except OSError:
+            destination.replace(source)
+            for candidate in removed:
+                os.link(original, candidate)
+            raise
         return destination
+
+
+def _begin_export(episode_id):
+    with EXPORT_STATE_LOCK:
+        if EXPORT_STATE["deleting"] or not EXPORT_LOCK.acquire(blocking=False):
+            return False
+        EXPORT_STATE.update(episode=episode_id, process=None, cancelled=False)
+        return True
+
+
+def _finish_export():
+    with EXPORT_STATE_LOCK:
+        EXPORT_STATE.update(episode=None, process=None, cancelled=False)
+        EXPORT_LOCK.release()
+
+
+def _export_cancelled():
+    with EXPORT_STATE_LOCK:
+        return EXPORT_STATE["cancelled"]
+
+
+def delete_episode(dataset_root, episode_id, *, session=None, current_only=False):
+    with EXPORT_STATE_LOCK:
+        if EXPORT_STATE["deleting"]:
+            raise ApiError(HTTPStatus.CONFLICT, "已有删除任务在进行")
+        if EXPORT_LOCK.locked() and EXPORT_STATE["episode"] != episode_id:
+            raise ApiError(HTTPStatus.CONFLICT, "正在导出其他 Episode，请稍后重试")
+        EXPORT_STATE["deleting"] = True
+        EXPORT_STATE["cancelled"] = EXPORT_LOCK.locked()
+        process = EXPORT_STATE["process"]
+    try:
+        if process is not None and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        if not EXPORT_LOCK.acquire(timeout=5):
+            with EXPORT_STATE_LOCK:
+                process = EXPORT_STATE["process"]
+            if process is not None and process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if not EXPORT_LOCK.acquire(timeout=5):
+                raise ApiError(HTTPStatus.CONFLICT, "导出进程未退出，Episode 未删除")
+        try:
+            with START_LOCK:
+                if current_only:
+                    current = collection_status()
+                    if (current.get("episode_id"), current.get("session")) != (episode_id, session):
+                        raise ApiError(HTTPStatus.CONFLICT, "上一段录制已改变，Episode 未删除")
+                return move_episode_to_trash(dataset_root, episode_id, collection_active(),
+                                             session=session, export_locked=True)
+        finally:
+            EXPORT_LOCK.release()
+    finally:
+        with EXPORT_STATE_LOCK:
+            EXPORT_STATE["deleting"] = False
 
 
 def open_episode_directory(dataset_root, episode_id, opener=None, launch=None):
@@ -198,6 +277,8 @@ def mcap_export_files(dataset_root, episode_ids, variant="av1"):
 
 
 def _run_mcap_export(episode_id, variant):
+    if _export_cancelled():
+        raise ApiError(HTTPStatus.CONFLICT, "MCAP 导出已中止")
     try:
         mcap_export_files(DATASET_ROOT, [episode_id], variant)
         return {"ready": True}
@@ -224,11 +305,23 @@ def _run_mcap_export(episode_id, variant):
             name = f"{variant}_{suffix}"
             command += ["--" + name.replace("_", "-"), str(COLLECTION_SETTINGS["export"][name])]
     with log_path.open("ab", buffering=0) as log:
-        result = subprocess.run(command, cwd=PROJECT_ROOT, env=teleop_environment(),
-                                stdout=log, stderr=subprocess.STDOUT)
-    if result.returncode:
+        environment = teleop_environment()
+        with EXPORT_STATE_LOCK:
+            if EXPORT_STATE["cancelled"]:
+                raise ApiError(HTTPStatus.CONFLICT, "MCAP 导出已中止")
+            process = subprocess.Popen(command, cwd=PROJECT_ROOT, env=environment,
+                                       stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            EXPORT_STATE["process"] = process
+        try:
+            returncode = process.wait()
+        finally:
+            with EXPORT_STATE_LOCK:
+                EXPORT_STATE["process"] = None
+    if _export_cancelled():
+        raise ApiError(HTTPStatus.CONFLICT, "MCAP 导出已中止")
+    if returncode:
         raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
-                       collection_exit_error(log_path, result.returncode, "MCAP 打包") + f"；日志：{log_path}")
+                       collection_exit_error(log_path, returncode, "MCAP 打包") + f"；日志：{log_path}")
     mcap_export_files(DATASET_ROOT, [episode_id], variant)
     return {"ready": True}
 
@@ -238,12 +331,12 @@ def prepare_mcap_export(payload):
     episode_id = payload.get("episode")
     if not isinstance(episode_id, str) or not EPISODE_RE.fullmatch(episode_id):
         raise ApiError(HTTPStatus.BAD_REQUEST, "Episode ID 格式无效")
-    if not EXPORT_LOCK.acquire(blocking=False):
+    if not _begin_export(episode_id):
         raise ApiError(HTTPStatus.CONFLICT, "正在启动或打包，请稍后重试")
     try:
         return _run_mcap_export(episode_id, variant)
     finally:
-        EXPORT_LOCK.release()
+        _finish_export()
 
 
 def episode_record(path):
@@ -656,24 +749,28 @@ def _publish_h264(episode_id, started_at):
 def _automatic_h264_export(job):
     try:
         _run_mcap_export(job["episode_id"], "h264")
+        if _export_cancelled():
+            raise ApiError(HTTPStatus.CONFLICT, "MCAP 导出已中止")
         output = _publish_h264(job["episode_id"], job["started_at"])
     except (ApiError, OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         message = error.message if isinstance(error, ApiError) else str(error)
+        cancelled = _export_cancelled()
         with STATE_LOCK:
-            job["export_status"] = "failed"
-            job["export_error"] = message
-        print_status_error("H264 自动转换", message)
+            job["export_status"] = "cancelled" if cancelled else "failed"
+            job["export_error"] = None if cancelled else message
+        if not cancelled:
+            print_status_error("H264 自动转换", message)
     else:
         with STATE_LOCK:
             job["export_status"] = "completed"
             job["export_path"] = str(output)
         print_status_error("H264 自动转换", None)
     finally:
-        EXPORT_LOCK.release()
+        _finish_export()
 
 
 def _start_automatic_h264_export(job):
-    if not EXPORT_LOCK.acquire(blocking=False):
+    if not _begin_export(job["episode_id"]):
         with STATE_LOCK:
             job["export_status"] = "failed"
             job["export_error"] = "已有导出任务在运行"
@@ -685,7 +782,7 @@ def _start_automatic_h264_export(job):
     try:
         threading.Thread(target=_automatic_h264_export, args=(job,), daemon=False).start()
     except RuntimeError as error:
-        EXPORT_LOCK.release()
+        _finish_export()
         with STATE_LOCK:
             job["export_status"] = "failed"
             job["export_error"] = str(error)
@@ -747,6 +844,7 @@ def update_hotkey_settings(payload):
 
 def handle_controller_button(packet):
     global HOTKEY_AFTER_NS, HOTKEY_STATUS
+    delete_target = None
     now = time.monotonic_ns()
     if not isinstance(packet, dict) or packet.get("button") not in ("X", "Y"):
         return
@@ -776,9 +874,9 @@ def handle_controller_button(packet):
                 raise ApiError(HTTPStatus.CONFLICT, "Y：请先结束录制并等待保存完成")
             if not current.get("episode_exists"):
                 raise ApiError(HTTPStatus.CONFLICT, "Y：本次 UI 运行中没有可删除的上一段录制")
-            destination = move_episode_to_trash(DATASET_ROOT, current["episode_id"], session=current["session"])
-            message = f"Y：{current['episode_id']} 已移到回收站，可恢复：{destination}"
-        HOTKEY_STATUS = {"at_ns": now, "message": message, "error": False}
+            delete_target = (current["episode_id"], current["session"])
+        if delete_target is None:
+            HOTKEY_STATUS = {"at_ns": now, "message": message, "error": False}
     except (ApiError, OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         message = error.message if isinstance(error, ApiError) else str(error)
         HOTKEY_STATUS = {"at_ns": now, "message": message, "error": True}
@@ -786,6 +884,15 @@ def handle_controller_button(packet):
     finally:
         HOTKEY_AFTER_NS = time.monotonic_ns()
         START_LOCK.release()
+    if delete_target is not None:
+        episode_id, session = delete_target
+        try:
+            destination = delete_episode(DATASET_ROOT, episode_id, session=session, current_only=True)
+            HOTKEY_STATUS = {"at_ns": now, "message": f"Y：{episode_id} 已移到回收站，可恢复：{destination}", "error": False}
+        except (ApiError, OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+            message = error.message if isinstance(error, ApiError) else str(error)
+            HOTKEY_STATUS = {"at_ns": now, "message": message, "error": True}
+            print_status_error("手柄数采", message)
 
 
 def listen_controller_buttons(channel, stopped):
@@ -855,7 +962,7 @@ def request_robot_reset(payload):
 
 def _start_collection(payload, part):
     global COLLECTION, DEVICES, HOTKEY_AFTER_NS
-    if part == "recording" and EXPORT_LOCK.locked():
+    if part == "recording" and (EXPORT_LOCK.locked() or EXPORT_STATE["deleting"]):
         raise ApiError(HTTPStatus.CONFLICT, "正在导出，请等待完成后录制")
     if RESET_LOCK.locked():
         raise ApiError(HTTPStatus.CONFLICT, "机器人正在复位")
@@ -1287,8 +1394,7 @@ class Handler(SimpleHTTPRequestHandler):
         def delete():
             if self.read_body().get("confirm") is not True:
                 raise ApiError(HTTPStatus.BAD_REQUEST, "删除前必须明确确认")
-            with START_LOCK:
-                destination = move_episode_to_trash(DATASET_ROOT, match.group(1), collection_active())
+            destination = delete_episode(DATASET_ROOT, match.group(1))
             self.send_json({"deleted": match.group(1), "trash": destination.name})
 
         return self.handle_api(delete)

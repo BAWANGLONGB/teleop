@@ -14,6 +14,37 @@ from xr_marvin_teleop.collection.config import write_json
 
 
 class TestUiExport(unittest.TestCase):
+    def test_delete_cancels_automatic_h264_export_before_publish(self):
+        from xr_marvin_teleop.web import server as ui
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ui.DATASET_ROOT = root / "dataset"
+            ui.COLLECTION_EXPORT_ROOT = root / "collection"
+            episode = ui.DATASET_ROOT / "session_test/episode_120000_deadbeef"
+            episode.mkdir(parents=True)
+            write_json(episode / "metadata.json", {"status": "completed"})
+            started, stopped = threading.Event(), threading.Event()
+            process = Mock(pid=12345)
+            process.poll.return_value = None
+
+            def wait():
+                started.set()
+                self.assertTrue(stopped.wait(2))
+                return -15
+
+            process.wait.side_effect = wait
+            job = {"episode_id": episode.name, "started_at": 1}
+            with patch.object(ui, "COLLECTION", None), patch.object(ui, "teleop_environment", return_value={}), \
+                 patch.object(ui.subprocess, "Popen", return_value=process), \
+                 patch.object(ui.os, "killpg", side_effect=lambda *_: stopped.set()):
+                ui._start_automatic_h264_export(job)
+                self.assertTrue(started.wait(2))
+                moved = ui.delete_episode(ui.DATASET_ROOT, episode.name)
+            self.assertTrue(moved.is_dir())
+            self.assertEqual(job["export_status"], "cancelled")
+            self.assertFalse(list(ui.COLLECTION_EXPORT_ROOT.rglob("*.mcap")))
+
     def test_successful_recording_auto_exports_h264_to_daily_collection(self):
         from xr_marvin_teleop.web import server as ui
 
@@ -50,10 +81,10 @@ class TestUiExport(unittest.TestCase):
                 final = episode / "final"
                 final.mkdir()
                 (final / f"{episode.name}.h264.mcap").write_bytes(b"h264")
-                return Mock(returncode=0)
+                return Mock(wait=Mock(return_value=0))
 
             with patch.object(ui, "teleop_environment", return_value={}), \
-                 patch.object(ui.subprocess, "run", side_effect=pack) as run, \
+                 patch.object(ui.subprocess, "Popen", side_effect=pack) as run, \
                  patch.object(ui.threading, "Thread", ImmediateThread):
                 ui._watch_job("recording", process, root / "config.json", root / "ready")
 
@@ -64,6 +95,14 @@ class TestUiExport(unittest.TestCase):
             self.assertEqual(job["export_path"], str(exported))
             self.assertFalse(ui.EXPORT_LOCK.locked())
             run.assert_called_once()
+            unrelated = ui.COLLECTION_EXPORT_ROOT / "2026-09-19" / exported.name
+            unrelated.parent.mkdir()
+            unrelated.write_bytes(b"other session")
+            moved = ui.delete_episode(ui.DATASET_ROOT, episode.name)
+            self.assertTrue(moved.is_dir())
+            self.assertFalse(exported.exists())
+            self.assertEqual(unrelated.read_bytes(), b"other session")
+            self.assertFalse(episode.exists())
 
             failed = Mock()
             failed.wait.return_value = 1
@@ -189,9 +228,9 @@ class TestUiExport(unittest.TestCase):
                             self.assertNotIn(flag, command)
                 (episode / "final").mkdir(exist_ok=True)
                 (episode / "final" / f"{episode.name}.{variant}.mcap").write_bytes(variant.encode())
-                return Mock(returncode=0)
+                return Mock(wait=Mock(return_value=0))
 
-            with patch.object(ui, "teleop_environment", return_value={}), patch.object(ui.subprocess, "run", side_effect=pack) as run:
+            with patch.object(ui, "teleop_environment", return_value={}), patch.object(ui.subprocess, "Popen", side_effect=pack) as run:
                 self.assertEqual(ui.prepare_mcap_export(payload), {"ready": True})
                 ui.prepare_mcap_export(payload)
                 self.assertEqual(run.call_count, 1)
@@ -213,7 +252,7 @@ class TestUiExport(unittest.TestCase):
                         ui.prepare_mcap_export(payload)
                 self.assertEqual(run.call_count, 3)
                 run.side_effect = None
-                run.return_value = Mock(returncode=1)
+                run.return_value = Mock(wait=Mock(return_value=1))
                 with self.assertRaises(ui.ApiError):
                     ui.prepare_mcap_export(payload)
                 self.assertFalse(av1.exists())

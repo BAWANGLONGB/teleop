@@ -2,8 +2,11 @@ import importlib.util
 import json
 from pathlib import Path
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -158,6 +161,69 @@ class TestCollectionHotkeys(unittest.TestCase):
                 press("Y")
                 self.assertTrue(other.is_dir())
                 self.assertTrue(ui.HOTKEY_STATUS["error"])
+
+    def test_y_stops_inflight_export_before_delete(self):
+        spec = importlib.util.spec_from_file_location("cancel_ui", Path(__file__).resolve().parents[1] / "ui/server.py")
+        ui = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ui)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ui.DATASET_ROOT = root / "dataset"
+            ui.COLLECTION_EXPORT_ROOT = root / "collection"
+            episode = ui.DATASET_ROOT / "session_test/episode_120000_deadbeef"
+            episode.mkdir(parents=True)
+            write_json(episode / "metadata.json", {"status": "completed"})
+            (episode / "final").mkdir()
+            original = episode / "final" / f"{episode.name}.h264.mcap"
+            original.write_bytes(b"h264")
+            published = ui.COLLECTION_EXPORT_ROOT / "2026-09-18" / original.name
+            published.parent.mkdir(parents=True)
+            published.hardlink_to(original)
+            recording = Mock()
+            recording.poll.return_value = 0
+            ui.COLLECTION = {"process": recording, "status": "completed", "episode_id": episode.name,
+                             "session": episode.parent.name, "episode_path": str(episode),
+                             "task": "test", "started_at": 1, "log": root / "recording.log"}
+            ui.DEVICES = {"hotkey_token": "test", "recording_payload": {}}
+            launched = threading.Event()
+            children = []
+            errors = []
+            real_popen = subprocess.Popen
+
+            def slow_export(_command, **kwargs):
+                process = real_popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                     stdout=kwargs["stdout"], stderr=kwargs["stderr"], start_new_session=True)
+                children.append(process)
+                launched.set()
+                return process
+
+            def run_export():
+                try:
+                    ui.prepare_mcap_export({"episode": episode.name, "format": "av1"})
+                except ui.ApiError as error:
+                    errors.append(error)
+
+            try:
+                with patch.object(ui, "teleop_environment", return_value={}), \
+                     patch.object(ui.subprocess, "Popen", side_effect=slow_export), \
+                     patch.object(ui, "devices_active", return_value=True):
+                    worker = threading.Thread(target=run_export)
+                    worker.start()
+                    self.assertTrue(launched.wait(2))
+                    ui.handle_controller_button({"button": "Y", "at_ns": time.monotonic_ns(), "token": "test"})
+                    worker.join(2)
+                self.assertFalse(ui.HOTKEY_STATUS["error"])
+                self.assertFalse(episode.exists())
+                self.assertFalse(published.exists())
+                self.assertEqual(children[0].poll(), -15)
+                self.assertFalse(ui.EXPORT_LOCK.locked())
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(len(errors), 1)
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                        child.wait()
 
 
 if __name__ == "__main__":

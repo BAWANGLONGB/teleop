@@ -28,7 +28,6 @@ from xr_marvin_teleop.adapters.xr import XrClient, XrSnapshot
 from xr_marvin_teleop.control.mapping import (
     XrTargetMapper,
     transform_controller_poses_to_marvin_frame,
-    yaw_rotation_from_openxr_pose,
 )
 from xr_marvin_teleop.adapters.marvin import (
     MarvinModbusGripperConfiguration,
